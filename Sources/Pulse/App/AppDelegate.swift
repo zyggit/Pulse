@@ -201,7 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = statusItem?.button else { return }
         menuBarGeneration += 1
         let generation = menuBarGeneration
-        let (reading, remaining, style, label) = withObservationTracking {
+        let (reading, remaining, style, label, subPrice, subCurrency) = withObservationTracking {
             let reading = settings.showsUsageInMenuBar
                 ? MenuBarReading.choose(
                     among: settings.shownAccounts,
@@ -212,8 +212,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 )
                 : nil
             // The label inside too: renaming the account is a change to show.
+            let subPrice = reading.map { settings.subscriptionPrice(for: $0.account) } ?? nil
+            let subCurrency = reading.map { settings.subscriptionCurrency(for: $0.account) } ?? "USD"
             return (reading, settings.showsRemaining, settings.menuBarStyle,
-                    reading.map { settings.label(for: $0.account) })
+                    reading.map { settings.label(for: $0.account) },
+                    subPrice, subCurrency)
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, self.menuBarGeneration == generation else { return }
@@ -221,7 +224,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
 
-        MenuBarReading.draw(reading, remaining: remaining, style: style, label: label, on: button)
+        MenuBarReading.draw(reading, remaining: remaining, style: style, label: label,
+                            subscriptionPrice: subPrice, subscriptionCurrency: subCurrency,
+                            on: button)
     }
 
     /// An accessory app has no Dock icon. When the panel is also hidden, a

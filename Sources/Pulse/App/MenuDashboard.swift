@@ -137,6 +137,24 @@ struct MenuDashboard: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            // Total monthly subscription cost — only when at least one price
+            // has been entered and the accounts are subscription accounts.
+            let totals = settings.monthlySubscriptionTotals()
+            if !totals.isEmpty {
+                Divider()
+                    .padding(.vertical, 2)
+                ForEach(Array(totals.sorted(by: { $0.key < $1.key })), id: \.key) { pair in
+                    HStack {
+                        Text(localized: "Monthly subscriptions")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 12)
+                        Text(verbatim: SubscriptionSettingsView.format(pair.value, currency: pair.key))
+                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    }
+                }
+            }
         }
         .padding(.leading, Self.leading)
         .padding(.trailing, Self.trailing)
@@ -153,6 +171,11 @@ struct MenuDashboard: View {
             [window.name, UsageDetailCard.resetDescription(window)].filter { !$0.isEmpty }.joined(separator: " · ")
         } ?? (reading.money == nil ? String.localized("No reading") : nil)
 
+        let price = settings.subscriptionPrice(for: account)
+        let priceText: String? = price.map {
+            SubscriptionSettingsView.format($0, currency: settings.subscriptionCurrency(for: account))
+        }
+
         return HStack(alignment: .firstTextBaseline, spacing: 6) {
             LobeIconView(resource: account.provider.iconResource, size: 15)
                 .foregroundStyle(.primary)
@@ -163,6 +186,15 @@ struct MenuDashboard: View {
                         .font(.system(size: 13))
                         .lineLimit(1)
                     Spacer(minLength: 12)
+                    // Subscription price on the right, usage figure
+                    // immediately below the name in smaller text — two
+                    // separate concerns that must not share a column.
+                    if let priceText {
+                        Text(verbatim: priceText)
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                     Text(verbatim: reading.text(remaining: settings.showsRemaining))
                         .font(.system(size: 13, weight: .medium).monospacedDigit())
                         .foregroundStyle(reading.isAlert ? Color.red : Color.primary)

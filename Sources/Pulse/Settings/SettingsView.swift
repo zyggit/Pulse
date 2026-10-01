@@ -138,7 +138,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $navigation.pane) {
-                if SettingsPane.panel.contains(where: matches) || matches(.spend) {
+                if SettingsPane.panel.contains(where: matches) || matches(.spend) || matches(.subscription) {
                     Section(String.localized("Panel")) {
                         ForEach(SettingsPane.panel.filter(matches), id: \.self) { row($0) }
                         // Above the accounts, not below them. Eighteen
@@ -147,6 +147,7 @@ struct SettingsView: View {
                         // together" was landing under the fold — reachable
                         // only by scrolling past the thing it summarises.
                         if matches(.spend) { row(.spend) }
+                        if matches(.subscription) { row(.subscription) }
                     }
                 }
 
@@ -260,7 +261,7 @@ struct SettingsView: View {
             )
             .overlay {
                 if isSearching, matchingAccounts.isEmpty,
-                   !(SettingsPane.panel + [.spend, .extensions] + SettingsPane.application + SettingsPane.trailing).contains(where: matches) {
+                   !(SettingsPane.panel + [.spend, .subscription, .extensions] + SettingsPane.application + SettingsPane.trailing).contains(where: matches) {
                     Text(localized: "No matches")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
@@ -321,6 +322,8 @@ struct SettingsView: View {
                             }
                         case .about: about
                         case .integrations: DeveloperIntegrationsView(settings: settings)
+                        case .subscription:
+                            SubscriptionSettingsView(settings: settings)
                         case .extensions:
                             ExtensionsSettingsView(settings: settings) { navigation.pane = .account($0) }
                         }
@@ -3504,6 +3507,10 @@ enum SettingsPane: Hashable {
     /// provider, which is why it sits outside the accounts rather than inside
     /// one of them.
     case spend
+    /// Subscription cost tracker: each account's monthly fee, total, and
+    /// invoice/order links — entered by the reader, not derived from the
+    /// provider.
+    case subscription
     case about
     case integrations
     /// Where extensions live and which were found. Each one found is an
@@ -3527,6 +3534,9 @@ enum SettingsPane: Hashable {
         // Not "Usage history", which is what a provider's own card is called.
         // Two panes with one name is two places to look for one thing.
         case .spend: .localized("Token spend")
+        // Not "Billing": that is a provider concept and the thing here is
+        // entered by the reader, not read from any service.
+        case .subscription: .localized("Subscriptions")
         // Brand names, left as they are in every language.
         // A fallback: the view titles these from the account's own label.
         case .account(let account): account.provider.displayName
@@ -3547,6 +3557,7 @@ enum SettingsPane: Hashable {
         case .notifications: "bell"
         case .network: "network"
         case .spend: "chart.bar"
+        case .subscription: "creditcard"
         case .account: "square.stack.3d.up"
         case .about: "info.circle"
         case .integrations: "terminal"
@@ -3580,7 +3591,7 @@ enum SettingsPane: Hashable {
             [.localized("Check every"), .localized("Proxy")]
         case .extensions:
             [.localized("Extensions"), .localized("Look again")]
-        case .account, .spend, .about, .integrations:
+        case .account, .spend, .subscription, .about, .integrations:
             []
         }
     }

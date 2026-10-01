@@ -903,3 +903,19 @@
 "Last used %@" = "Last used %@";
 "The latest one's cache lapsed at %@." = "The latest one's cache lapsed at %@.";
 "Read from Claude Code's own records: each reply says whether it cached for an hour or five minutes, and a cache lasts that long from the last request that used it. That is the time if nothing before it has changed — switching model, changing tools or compacting starts a new cache. Subagents keep caches of their own and are not listed." = "Read from Claude Code's own records: each reply says whether it cached for an hour or five minutes, and a cache lasts that long from the last request that used it. That is the time if nothing before it has changed — switching model, changing tools or compacting starts a new cache. Subagents keep caches of their own and are not listed.";
+
+/* Subscription settings pane */
+"Subscriptions" = "Subscriptions";
+"Monthly total" = "Monthly total";
+"No prices entered yet" = "No prices entered yet";
+"Add a monthly price to each subscription below." = "Add a monthly price to each subscription below.";
+"No subscriptions on the rail." = "No subscriptions on the rail.";
+"Monthly price" = "Monthly price";
+"Invoice / order URL" = "Invoice / order URL";
+"Add price" = "Add price";
+"Add link" = "Add link";
+"Open" = "Open";
+"Save" = "Save";
+"Clear" = "Clear";
+"/ month" = "/ month";
+"Monthly subscriptions" = "Monthly subscriptions";

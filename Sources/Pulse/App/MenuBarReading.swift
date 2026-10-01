@@ -155,6 +155,8 @@ extension MenuBarReading {
         remaining: Bool,
         style: MenuBarStyle,
         label: String?,
+        subscriptionPrice: Double? = nil,
+        subscriptionCurrency: String = "USD",
         on button: NSStatusBarButton
     ) {
         guard let reading else {
@@ -175,7 +177,13 @@ extension MenuBarReading {
         } else {
             tooltipFigure = reading.money ?? String.localized("No reading")
         }
-        button.toolTip = [label, tooltipFigure].compactMap { $0 }.joined(separator: "\n")
+        // Monthly subscription price shown as a third line when the reader
+        // has entered one — a glance fact that is useful without opening Settings.
+        let priceLineText: String? = subscriptionPrice.map {
+            SubscriptionSettingsView.format($0, currency: subscriptionCurrency)
+                + " " + String.localized("/ month")
+        }
+        button.toolTip = [label, tooltipFigure, priceLineText].compactMap { $0 }.joined(separator: "\n")
 
         // The ring needs a limit to measure; money and "no reading" stay text.
         if style == .ring, let fraction = reading.ringFraction(remaining: remaining) {

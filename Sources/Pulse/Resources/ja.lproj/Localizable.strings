@@ -903,3 +903,19 @@
 "Last used %@" = "最終使用 %@";
 "The latest one's cache lapsed at %@." = "直近の会話のキャッシュは %@ に期限切れになりました。";
 "Read from Claude Code's own records: each reply says whether it cached for an hour or five minutes, and a cache lasts that long from the last request that used it. That is the time if nothing before it has changed — switching model, changing tools or compacting starts a new cache. Subagents keep caches of their own and are not listed." = "Claude Code 自身の記録から読み取ります。各返信には、キャッシュを 1 時間と 5 分のどちらで保存したかが書かれており、キャッシュは最後にリクエストされた時点からその時間だけ保たれます。これは、それより前の内容が変わっていない場合の時間です。モデルの切り替え、ツールの変更、会話の圧縮を行うと、新しいキャッシュが作られます。サブエージェントは独自のキャッシュを持つため、ここには表示しません。";
+
+/* サブスクリプション設定ペイン */
+"Subscriptions" = "サブスクリプション";
+"Monthly total" = "月間合計";
+"No prices entered yet" = "価格が未入力です";
+"Add a monthly price to each subscription below." = "以下の各サブスクリプションに月額料金を入力してください。";
+"No subscriptions on the rail." = "サイドバーにサブスクリプションアカウントがありません。";
+"Monthly price" = "月額";
+"Invoice / order URL" = "請求書/注文URL";
+"Add price" = "価格を追加";
+"Add link" = "リンクを追加";
+"Open" = "開く";
+"Save" = "保存";
+"Clear" = "クリア";
+"/ month" = "/ 月";
+"Monthly subscriptions" = "月間サブスクリプション";

@@ -321,6 +321,83 @@ final class AppSettings {
         }
     }
 
+    /// The monthly subscription cost per account, keyed by account id.
+    ///
+    /// Entered by the reader: Pulse cannot derive this from the provider, which
+    /// reports usage but not what the plan costs. Nil means no price has been
+    /// entered and nothing is shown. Zero is a real free-tier entry.
+    var subscriptionPrices: [String: Double] = [:] {
+        didSet {
+            guard subscriptionPrices != oldValue else { return }
+            UserDefaults.standard.set(subscriptionPrices, forKey: Key.subscriptionPrices)
+        }
+    }
+
+    /// The currency ISO code for each account's subscription price.
+    ///
+    /// Nil falls back to USD. Stored alongside the amount so a ¥ price is
+    /// never compared against a $ total — the denominator must carry its unit.
+    var subscriptionCurrencies: [String: String] = [:] {
+        didSet {
+            guard subscriptionCurrencies != oldValue else { return }
+            UserDefaults.standard.set(subscriptionCurrencies, forKey: Key.subscriptionCurrencies)
+        }
+    }
+
+    /// A URL pointing at an invoice or billing page, per account.
+    ///
+    /// Entered by the reader. Nil means no link. Stored as a plain string so
+    /// a half-typed URL does not open anything; opened on demand.
+    var subscriptionInvoiceURLs: [String: String] = [:] {
+        didSet {
+            guard subscriptionInvoiceURLs != oldValue else { return }
+            UserDefaults.standard.set(subscriptionInvoiceURLs, forKey: Key.subscriptionInvoiceURLs)
+        }
+    }
+
+    func subscriptionPrice(for account: AccountKey) -> Double? {
+        subscriptionPrices[account.id]
+    }
+
+    func setSubscriptionPrice(_ price: Double?, for account: AccountKey) {
+        var updated = subscriptionPrices
+        updated[account.id] = price
+        subscriptionPrices = updated
+    }
+
+    func subscriptionCurrency(for account: AccountKey) -> String {
+        subscriptionCurrencies[account.id] ?? "USD"
+    }
+
+    func setSubscriptionCurrency(_ currency: String, for account: AccountKey) {
+        var updated = subscriptionCurrencies
+        updated[account.id] = currency.isEmpty ? nil : currency
+        subscriptionCurrencies = updated
+    }
+
+    func subscriptionInvoiceURL(for account: AccountKey) -> String {
+        subscriptionInvoiceURLs[account.id] ?? ""
+    }
+
+    func setSubscriptionInvoiceURL(_ url: String, for account: AccountKey) {
+        var updated = subscriptionInvoiceURLs
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated[account.id] = trimmed.isEmpty ? nil : trimmed
+        subscriptionInvoiceURLs = updated
+    }
+
+    /// Total monthly subscription cost across all enabled subscription accounts,
+    /// grouped by currency code. Accounts with no price entered are skipped.
+    func monthlySubscriptionTotals() -> [String: Double] {
+        var totals: [String: Double] = [:]
+        for account in shownAccounts where account.provider.billing == .subscription {
+            guard let price = subscriptionPrice(for: account) else { continue }
+            let currency = subscriptionCurrency(for: account)
+            totals[currency, default: 0] += price
+        }
+        return totals
+    }
+
     /// The order the rail draws them in, as account ids.
     ///
     /// Stored rather than derived so it survives a launch, and resolved through
@@ -1683,6 +1760,9 @@ final class AppSettings {
         settings.balanceBases = defaults.dictionary(forKey: Key.balanceBases) as? [String: String] ?? [:]
         settings.balanceBudgets = (defaults.dictionary(forKey: Key.balanceBudgets) as? [String: Double] ?? [:])
             .filter { $0.value.isFinite && $0.value > 0 }
+        settings.subscriptionPrices = defaults.dictionary(forKey: Key.subscriptionPrices) as? [String: Double] ?? [:]
+        settings.subscriptionCurrencies = defaults.dictionary(forKey: Key.subscriptionCurrencies) as? [String: String] ?? [:]
+        settings.subscriptionInvoiceURLs = defaults.dictionary(forKey: Key.subscriptionInvoiceURLs) as? [String: String] ?? [:]
         settings.detectedProviders = detected
         settings.suggestedProviders = selection.suggestedProviders
         settings.extensions = scan.extensions
@@ -1763,6 +1843,9 @@ final class AppSettings {
         botShapes[account.id] = nil
         detailedCards.remove(account.id)
         splitAccounts.remove(account.id)
+        subscriptionPrices[account.id] = nil
+        subscriptionCurrencies[account.id] = nil
+        subscriptionInvoiceURLs[account.id] = nil
         if menuBarAccount == account.id { menuBarAccount = nil }
     }
 
@@ -1838,5 +1921,8 @@ final class AppSettings {
         static let alertsOnReset = "settings.alertsOnReset"
         static let alertsOnFailure = "settings.alertsOnFailure"
         static let providerOrder = "settings.providerOrder"
+        static let subscriptionPrices = "settings.subscriptionPrices"
+        static let subscriptionCurrencies = "settings.subscriptionCurrencies"
+        static let subscriptionInvoiceURLs = "settings.subscriptionInvoiceURLs"
     }
 }
