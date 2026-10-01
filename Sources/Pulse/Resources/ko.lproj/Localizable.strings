@@ -919,3 +919,20 @@
 "Clear" = "지우기";
 "/ month" = "/ 월";
 "Monthly subscriptions" = "월간 구독";
+
+/* 구독 청구 내역 */
+"Last %@ months" = "지난 %@개월";
+"Billing history" = "청구 내역";
+"Period" = "기간";
+"Months with a recorded payment." = "결제가 기록된 월입니다.";
+"Log payment" = "결제 기록";
+"No payments recorded yet" = "아직 기록된 결제 내역이 없습니다";
+"Record what was actually charged each month." = "매월 실제로 청구된 금액을 기록합니다.";
+"Period total" = "기간 합계";
+"Months recorded" = "기록된 월수";
+"Avg / month" = "월평균";
+"No data in this period." = "이 기간의 데이터가 없습니다.";
+"Month by month" = "월별 내역";
+"Add" = "추가";
+"Monthly billing" = "월간 청구";
+"Month" = "월";

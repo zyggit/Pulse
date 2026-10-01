@@ -919,3 +919,20 @@
 "Clear" = "クリア";
 "/ month" = "/ 月";
 "Monthly subscriptions" = "月間サブスクリプション";
+
+/* サブスクリプション請求履歴 */
+"Last %@ months" = "過去 %@ か月";
+"Billing history" = "請求履歴";
+"Period" = "期間";
+"Months with a recorded payment." = "支払いが記録されている月。";
+"Log payment" = "支払いを記録";
+"No payments recorded yet" = "支払い記録がありません";
+"Record what was actually charged each month." = "毎月実際に請求された金額を記録します。";
+"Period total" = "期間合計";
+"Months recorded" = "記録月数";
+"Avg / month" = "月平均";
+"No data in this period." = "この期間のデータはありません。";
+"Month by month" = "月別明細";
+"Add" = "追加";
+"Monthly billing" = "月間請求";
+"Month" = "月";

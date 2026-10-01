@@ -919,3 +919,20 @@
 "Clear" = "Clear";
 "/ month" = "/ month";
 "Monthly subscriptions" = "Monthly subscriptions";
+
+/* Subscription billing history */
+"Last %@ months" = "Last %@ months";
+"Billing history" = "Billing history";
+"Period" = "Period";
+"Months with a recorded payment." = "Months with a recorded payment.";
+"Log payment" = "Log payment";
+"No payments recorded yet" = "No payments recorded yet";
+"Record what was actually charged each month." = "Record what was actually charged each month.";
+"Period total" = "Period total";
+"Months recorded" = "Months recorded";
+"Avg / month" = "Avg / month";
+"No data in this period." = "No data in this period.";
+"Month by month" = "Month by month";
+"Add" = "Add";
+"Monthly billing" = "Monthly billing";
+"Month" = "Month";

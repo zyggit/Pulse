@@ -31,6 +31,7 @@ struct SubscriptionSettingsView: View {
         VStack(alignment: .leading, spacing: 22) {
             totalGroup
             accountsGroup
+            SubscriptionBillingHistoryView(settings: settings)
         }
     }
 
@@ -215,7 +216,8 @@ struct SubscriptionSettingsView: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
     // MARK: - Currency picker

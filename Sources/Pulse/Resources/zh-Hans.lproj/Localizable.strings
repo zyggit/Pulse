@@ -919,3 +919,20 @@
 "Clear" = "清除";
 "/ month" = "/ 月";
 "Monthly subscriptions" = "每月订阅";
+
+/* 订阅历史账单 */
+"Last %@ months" = "最近 %@ 个月";
+"Billing history" = "历史账单";
+"Period" = "统计区间";
+"Months with a recorded payment." = "包含已记录扣费的月份。";
+"Log payment" = "记录账单";
+"No payments recorded yet" = "暂无账单记录";
+"Record what was actually charged each month." = "记录每个月实际扣费金额。";
+"Period total" = "区间合计";
+"Months recorded" = "记录月份";
+"Avg / month" = "月均支出";
+"No data in this period." = "此区间内无数据。";
+"Month by month" = "按月明细";
+"Add" = "添加";
+"Monthly billing" = "月度账单";
+"Month" = "月份";

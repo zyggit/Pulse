@@ -398,6 +398,68 @@ final class AppSettings {
         return totals
     }
 
+    /// Actual billing records per account, per calendar month.
+    ///
+    /// Keyed as `[accountId: [monthKey: amount]]` where `monthKey` is
+    /// `"YYYY-MM"`. The reader logs what was actually charged each month, which
+    /// may differ from the standing price — a pro-rated first month, an annual
+    /// discount, a refund. Stored separately from `subscriptionPrices` so the
+    /// history survives a price change.
+    var subscriptionBillingRecords: [String: [String: Double]] = [:] {
+        didSet {
+            guard subscriptionBillingRecords != oldValue else { return }
+            UserDefaults.standard.set(subscriptionBillingRecords, forKey: Key.subscriptionBillingRecords)
+        }
+    }
+
+    /// The amount recorded for a specific account and calendar month.
+    func billingRecord(for account: AccountKey, month: String) -> Double? {
+        subscriptionBillingRecords[account.id]?[month]
+    }
+
+    /// Records (or clears) the amount paid for a specific month.
+    ///
+    /// `amount` of nil removes the entry. A zero is a valid record — a free
+    /// month, or a waived charge — and is kept rather than treated as absent.
+    func setBillingRecord(_ amount: Double?, for account: AccountKey, month: String) {
+        var byAccount = subscriptionBillingRecords
+        var byMonth = byAccount[account.id] ?? [:]
+        byMonth[month] = amount
+        byAccount[account.id] = byMonth.isEmpty ? nil : byMonth
+        subscriptionBillingRecords = byAccount
+    }
+
+    /// All months that appear in any account's billing records, sorted newest
+    /// first. Each entry is a `"YYYY-MM"` key.
+    func allBillingMonths() -> [String] {
+        var seen = Set<String>()
+        for records in subscriptionBillingRecords.values {
+            seen.formUnion(records.keys)
+        }
+        return seen.sorted().reversed()
+    }
+
+    /// Month key for a `Date` — `"YYYY-MM"` in the reader's calendar.
+    static func billingMonthKey(for date: Date = Date(), calendar: Calendar = .current) -> String {
+        let comps = calendar.dateComponents([.year, .month], from: date)
+        return String(format: "%04d-%02d", comps.year ?? 0, comps.month ?? 0)
+    }
+
+    /// Total paid per currency across all enabled accounts for the given
+    /// month keys. Used by the history view to compute period totals.
+    func billingTotals(months: [String]) -> [String: Double] {
+        var totals: [String: Double] = [:]
+        for account in shownAccounts where account.provider.billing == .subscription {
+            let currency = subscriptionCurrency(for: account)
+            guard let byMonth = subscriptionBillingRecords[account.id] else { continue }
+            for month in months {
+                guard let amount = byMonth[month] else { continue }
+                totals[currency, default: 0] += amount
+            }
+        }
+        return totals
+    }
+
     /// The order the rail draws them in, as account ids.
     ///
     /// Stored rather than derived so it survives a launch, and resolved through
@@ -1763,6 +1825,7 @@ final class AppSettings {
         settings.subscriptionPrices = defaults.dictionary(forKey: Key.subscriptionPrices) as? [String: Double] ?? [:]
         settings.subscriptionCurrencies = defaults.dictionary(forKey: Key.subscriptionCurrencies) as? [String: String] ?? [:]
         settings.subscriptionInvoiceURLs = defaults.dictionary(forKey: Key.subscriptionInvoiceURLs) as? [String: String] ?? [:]
+        settings.subscriptionBillingRecords = defaults.dictionary(forKey: Key.subscriptionBillingRecords) as? [String: [String: Double]] ?? [:]
         settings.detectedProviders = detected
         settings.suggestedProviders = selection.suggestedProviders
         settings.extensions = scan.extensions
@@ -1846,6 +1909,7 @@ final class AppSettings {
         subscriptionPrices[account.id] = nil
         subscriptionCurrencies[account.id] = nil
         subscriptionInvoiceURLs[account.id] = nil
+        subscriptionBillingRecords[account.id] = nil
         if menuBarAccount == account.id { menuBarAccount = nil }
     }
 
@@ -1924,5 +1988,6 @@ final class AppSettings {
         static let subscriptionPrices = "settings.subscriptionPrices"
         static let subscriptionCurrencies = "settings.subscriptionCurrencies"
         static let subscriptionInvoiceURLs = "settings.subscriptionInvoiceURLs"
+        static let subscriptionBillingRecords = "settings.subscriptionBillingRecords"
     }
 }
