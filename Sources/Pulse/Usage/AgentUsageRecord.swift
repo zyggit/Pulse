@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// One **incremental** piece of work an agent's store recorded.
@@ -35,6 +36,11 @@ struct AgentUsageRecord: Sendable {
     var title: String? = nil
     var project: String? = nil
     var deduplicationID: String? = nil
+    /// The backend the store says the request went to — omp's `devin`,
+    /// `openai-codex`, `xai-oauth` and the like — where the format names one.
+    /// Never the reader's own guess: a record with none is left without a
+    /// provider, and a caller that filters on it keeps only what was stated.
+    var provider: String? = nil
     /// Real tokens that could not be placed in any of the four kinds.
     ///
     /// **Not a second copy of the reported total.** The caller passes only the
@@ -126,6 +132,7 @@ enum AgentUsageLedger {
         // session below is a subset of this bounded total, none of that
         // arithmetic needs a saturating guard of its own.
         var acceptedTotal = 0
+        var lookup = ModelPriceLookup(prices)
 
         for record in records {
             guard !Task.isCancelled else { return .empty }
@@ -184,7 +191,7 @@ enum AgentUsageLedger {
             // still count toward the totals and the models.
             guard let sessionID = Self.nonBlank(record.sessionID) else { continue }
 
-            let price = ModelPrices.price(for: model, in: prices, vendor: vendor)
+            let price = lookup.price(for: model, vendor: vendor)
             let money = price.map { record.tally.cost(at: $0) } ?? 0
             let unpriced = extra + (price == nil ? known : 0)
             let name = Self.nonBlank(record.sessionName)
@@ -241,7 +248,7 @@ enum AgentUsageLedger {
         // tokens must never be listed as having "no published price".
         var unpriced = Set(ledger.unpricedModels)
         for model in acceptedModels {
-            if let price = ModelPrices.price(for: model, in: prices, vendor: vendor) {
+            if let price = lookup.price(for: model, vendor: vendor) {
                 if let name = price.name { ledger.modelNames[model] = name }
             } else {
                 unpriced.insert(model)
@@ -257,7 +264,7 @@ enum AgentUsageLedger {
             slotByStart[slot.start] = slot
         }
         for (key, models) in eventUnknown {
-            guard let start = UsageLedgerReader.sharedSlotFormatter.date(from: key) else { continue }
+            guard let start = UsageLedgerReader.slotDate(key) else { continue }
             let extra = models.values.reduce(0, +)
             let slot = slotByStart[start] ?? UsageLedger.Slot(start: start, tokens: 0, cost: 0)
             slotByStart[start] = UsageLedger.Slot(
@@ -352,7 +359,7 @@ enum AgentUsageLedger {
     /// The calendar day a slot key falls on, exactly as the shared pricing
     /// pass would group it.
     private static func day(for key: String, calendar: Calendar) -> Date? {
-        guard let start = UsageLedgerReader.sharedSlotFormatter.date(from: key) else { return nil }
+        guard let start = UsageLedgerReader.slotDate(key) else { return nil }
         return calendar.startOfDay(for: start)
     }
 

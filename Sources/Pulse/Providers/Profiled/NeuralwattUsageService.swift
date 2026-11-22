@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Neuralwatt, inference priced by energy: a subscription's kilowatt-hour
@@ -185,10 +186,6 @@ enum NeuralwattUsageService {
     }
 
     private static func money(_ amount: Double, currency: String) -> String? {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = currency
-        formatter.locale = LocalizationSource.locale
-        return formatter.string(from: NSNumber(value: amount))
+        return Money.reported(amount, code: currency)
     }
 }

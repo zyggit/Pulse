@@ -12,8 +12,38 @@ struct CardHistoryTests {
         #expect(Provider.zai.cardHistory == .accountStatistics)
         #expect(Provider.glmCoding.cardHistory == .accountStatistics)
         #expect(Provider.kimiCode.cardHistory == .agents([.kimiCLI]))
-        // A provider with no records anywhere has no section to show.
-        #expect(Provider.deepSeek.cardHistory == nil)
+        // A provider with no records anywhere has no section to show — until
+        // its console sign-in is kept. Passed in: whether one is kept is this
+        // Mac's state (another test's `loadAPIKeys()` reads the real store).
+        #expect(Provider.deepSeek.cardHistory(openCodeSession: false, deepSeekSession: false) == nil)
+        #expect(Provider.deepSeek.cardHistory(openCodeSession: false, deepSeekSession: true) == .accountLogs)
+        #expect(Provider.openCodeGo.cardHistory(openCodeSession: true, deepSeekSession: false) == .accountLogs)
+    }
+
+    @Test func devinReadsItsOmpRecordsWhenItsOwnClientsAreAway() {
+        // The two Devin clients plus the records an omp transcript routes to
+        // the `devin` backend — the machine whose only Devin usage ran through
+        // `omp --model devin/…`.
+        #expect(
+            Provider.devin.cardHistory
+                == .agents([.devinCLI, .devinDesktop], slices: [
+                    CardHistorySource.AgentSlice(agent: .omp, provider: "devin"),
+                ])
+        )
+    }
+
+    /// The settings pane shows a history exactly where the card does: the
+    /// agents that borrow a provider's mark too, which the pane once left out
+    /// — MiniMax's card had MiniMax Code's history and its pane had none.
+    @Test func thePaneHasAHistoryWhereverTheCardDoes() {
+        #expect(Provider.minimax.providesHistory)
+        #expect(Provider.kimiCode.providesHistory)
+        #expect(Provider.commandCode.providesHistory)
+        #expect(Provider.claudeCode.providesHistory)
+        #expect(Provider.zai.providesHistory)
+        // Nothing reads a gateway's history.
+        #expect(Provider.sub2api.cardHistory == nil)
+        #expect(!Provider.sub2api.providesHistory)
     }
 
     @Test func onlyThisMacsRecordsWaitForTokenSpend() {
@@ -66,5 +96,13 @@ struct CardHistoryTests {
                                earliest: nil, unpricedModels: ["x"], modelNames: [:], slots: [])
         #expect(UsageLedger.adding([.empty, only]) == only)
         #expect(UsageLedger.adding([]).days.isEmpty)
+    }
+
+    /// OpenCode Go states what each limit is worth; there is nothing to estimate.
+    @Test func noValueEstimateWhereTheProviderStatesTheAllowance() {
+        #expect(!UsageDetailCard.estimatesValue(for: .openCodeGo))
+        #expect(!UsageDetailCard.estimatesValue(for: .deepSeek))
+        #expect(UsageDetailCard.estimatesValue(for: .claudeCode))
+        #expect(UsageDetailCard.estimatesValue(for: .codex))
     }
 }

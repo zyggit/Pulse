@@ -4,7 +4,9 @@ import Testing
 
 /// Cursor's `usage-summary` reply, reconstructed from `CursorUsageService`'s
 /// own `Reply` fields and [Docs/providers/cursor.md](../../Docs/providers/cursor.md)
-/// — not captured from a live account.
+/// — not captured from a live account. The weekly plan's `get-plan-info` and
+/// `get-current-period-usage` replies *are* captured, from a Premium account on
+/// 2026-10-16, with the marketing and model lists trimmed.
 @Suite("Cursor parsing")
 struct CursorParsingTests {
     private static func fixture(_ name: String) throws -> Data {
@@ -27,10 +29,10 @@ struct CursorParsingTests {
         return Calendar(identifier: .gregorian).date(from: components)!
     }()
 
+    /// The balance as every reported amount is written (`Money.reported`):
+    /// "$", never "US$", whatever the language.
     private static func dollars(_ amount: Double) -> String {
-        amount.formatted(
-            .currency(code: "USD").precision(.fractionLength(2)).locale(LocalizationSource.locale)
-        )
+        Money.reported(amount, code: "USD")
     }
 
     // MARK: - The two pools
@@ -151,17 +153,137 @@ struct CursorParsingTests {
         #expect(CursorUsageService.planName(nil) == nil)
     }
 
+    // MARK: - A weekly plan
+
+    private static func planInfo(_ name: String) throws -> CursorUsageService.PlanInfoReply.PlanInfo {
+        let reply = try JSONDecoder().decode(CursorUsageService.PlanInfoReply.self, from: try fixture(name))
+        return try #require(reply.planInfo)
+    }
+
+    private static func periodUsage(_ name: String) throws -> CursorUsageService.PeriodUsageReply {
+        try JSONDecoder().decode(CursorUsageService.PeriodUsageReply.self, from: try fixture(name))
+    }
+
+    /// #87: on a Premium account the usage summary reports both pools at 0%
+    /// while the week is a third gone.
+    @Test("A weekly plan's week takes the place of the two monthly pools")
+    func weeklyPlanReplacesThePools() throws {
+        let plan = try Self.planInfo("cursor-plan-info-weekly")
+        #expect(plan.isWeekly)
+
+        let summary = CursorUsageService.windows(from: try Self.reply("cursor-ondemand"))
+        let windows = CursorUsageService.weeklyWindows(
+            plan: plan, usage: try Self.periodUsage("cursor-period-usage-weekly"), summary: summary
+        )
+
+        #expect(windows.map(\.id) == ["weekly", "onDemand"])
+        let week = windows[0]
+        #expect(week.kind == .weekly)
+        #expect(abs(week.usedFraction - 0.3551462621885157) < 0.000_000_1)
+        #expect(week.resetsAt == Date(timeIntervalSince1970: 1_792_475_010.907))
+        #expect(week.reportsLength)
+        #expect(!week.isExhausted)
+    }
+
+    @Test("A monthly plan is not weekly, so the summary's pools stand")
+    func monthlyPlanIsNotWeekly() throws {
+        #expect(try !Self.planInfo("cursor-plan-info-monthly").isWeekly)
+    }
+
+    @Test("The period may come as its number, and an unknown one is not weekly")
+    func periodByNumber() throws {
+        func period(_ json: String) throws -> Bool {
+            let reply = try JSONDecoder().decode(
+                CursorUsageService.PlanInfoReply.self, from: Data(#"{"planInfo":{"includedUsagePeriod":\#(json)}}"#.utf8)
+            )
+            return try #require(reply.planInfo).isWeekly
+        }
+        #expect(try period("2"))
+        #expect(try !period("1"))
+        #expect(try !period(#""INCLUDED_USAGE_PERIOD_FORTNIGHTLY""#))
+    }
+
+    /// No figure is no window — a week drawn at 0% would be the same mistake
+    /// as the pools.
+    @Test("A weekly plan with no figure draws no week, never a zero")
+    func weeklyPlanWithoutAFigure() throws {
+        let windows = CursorUsageService.weeklyWindows(
+            plan: try Self.planInfo("cursor-plan-info-weekly"),
+            usage: try Self.periodUsage("cursor-period-usage-no-figure"),
+            summary: CursorUsageService.windows(from: try Self.reply("cursor-normal"))
+        )
+        #expect(windows.isEmpty)
+    }
+
     // MARK: - Unreadable reply
 
     /// The same decode `fetch()` relies on: a reply that fails to parse at
     /// all becomes `.unreadableReply` there. The HTTP status mapping (401 /
-    /// 403 / 429 / other) is a plain `switch` inline in `fetch()`, not a
-    /// separate function, so it is not exercised here — it would need a real
-    /// network call to reach.
+    /// 403 / 429 / other) lives in the private `read`, alongside the request,
+    /// so it is not exercised here — it would need a real network call to
+    /// reach.
     @Test("A reply that is not valid JSON fails to decode")
     func garbageReplyFailsToDecode() {
         #expect(throws: (any Error).self) {
             try JSONDecoder().decode(CursorUsageService.Reply.self, from: Data("not json at all".utf8))
         }
+    }
+
+    // MARK: - The cycle's stated length (#111)
+
+    private static func summary(start: String?, end: String?) throws -> CursorUsageService.Reply {
+        var fields: [String: Any] = [
+            "membershipType": "pro",
+            "individualUsage": [
+                "plan": ["enabled": true, "used": 500, "limit": 2000, "remaining": 1500,
+                         "autoPercentUsed": 10, "apiPercentUsed": 2],
+                "onDemand": ["enabled": true, "used": 350, "limit": 1000, "remaining": 650],
+            ],
+        ]
+        if let start { fields["billingCycleStart"] = start }
+        if let end { fields["billingCycleEnd"] = end }
+        let data = try JSONSerialization.data(withJSONObject: fields)
+        return try JSONDecoder().decode(CursorUsageService.Reply.self, from: data)
+    }
+
+    @Test("Both cycle ends give every window the cycle's real length")
+    func bothEndsGiveTheLength() throws {
+        let windows = CursorUsageService.windows(from: try Self.summary(
+            start: "2026-10-01T00:00:00.000Z", end: "2026-11-01T00:00:00.000Z"
+        ))
+        #expect(windows.map(\.id) == ["cursorModels", "otherModels", "onDemand"])
+        // October has 31 days: the length is the stamps', not a flat thirty.
+        #expect(windows.allSatisfy { $0.windowSeconds == 31 * 86_400 })
+        #expect(windows.allSatisfy { $0.reportsLength })
+        #expect(windows.allSatisfy { $0.resetsAt == Date(timeIntervalSince1970: 1_793_491_200) })
+
+        // Ten of thirty-one days gone is the clock's fraction.
+        let tenDaysIn = Date(timeIntervalSince1970: 1_793_491_200 - 21 * 86_400)
+        let elapsed = try #require(windows[0].elapsedFraction(at: tenDaysIn))
+        #expect(abs(elapsed - 10.0 / 31.0) < 0.000_001)
+    }
+
+    @Test("Without both cycle ends the thirty days stay a sort key")
+    func oneEndKeepsTheSortKey() throws {
+        for reply in [
+            try Self.summary(start: nil, end: "2026-11-01T00:00:00.000Z"),
+            try Self.summary(start: "2026-10-01T00:00:00.000Z", end: nil),
+            // An end before its start is not a length either.
+            try Self.summary(start: "2026-11-01T00:00:00.000Z", end: "2026-10-01T00:00:00.000Z"),
+        ] {
+            let windows = CursorUsageService.windows(from: reply)
+            #expect(windows.count == 3)
+            #expect(windows.allSatisfy { $0.windowSeconds == 30 * 86_400 })
+            #expect(windows.allSatisfy { !$0.reportsLength })
+            #expect(windows.allSatisfy { $0.elapsedFraction(at: Date()) == nil })
+        }
+    }
+
+    @Test("The plan-money fallback takes the stated length too")
+    func moneyFallbackTakesTheLength() throws {
+        let windows = CursorUsageService.windows(from: try Self.reply("cursor-enterprise-overall"))
+        let plan = try #require(windows.first { $0.id == "plan" })
+        #expect(plan.windowSeconds == 31 * 86_400)
+        #expect(plan.reportsLength)
     }
 }

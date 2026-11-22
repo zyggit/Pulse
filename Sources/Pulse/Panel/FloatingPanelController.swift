@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import AppKit
 import SwiftUI
 
@@ -43,13 +44,20 @@ final class FloatingPanelController {
         static func size(
             for edge: PanelEdge,
             notchSize: CGSize? = nil,
-            capacity: Int = PanelMetrics.railCapacity
+            capacity: Int = PanelMetrics.railCapacity,
+            docked: Bool = true,
+            cardHeight: CGFloat = DetailCardLayout.maximumHeight
         ) -> CGSize {
-            let size = unrounded(for: edge, notchSize: notchSize, capacity: capacity)
+            let size = unrounded(for: edge, notchSize: notchSize, capacity: capacity,
+                                 docked: docked, cardHeight: max(cardHeight, 0))
             return CGSize(width: size.width.rounded(.up), height: size.height.rounded(.up))
         }
 
-        private static func unrounded(for edge: PanelEdge, notchSize: CGSize?, capacity: Int) -> CGSize {
+        /// `docked` only moves the lying rail's thickness: free across with
+        /// its figures under the rings it is thicker than the top dock, and
+        /// the top dock keeps exactly its own budget.
+        private static func unrounded(for edge: PanelEdge, notchSize: CGSize?, capacity: Int,
+                                      docked: Bool, cardHeight: CGFloat) -> CGSize {
             // Card + its pointer + the gap after it, which is the room the
             // card unfolds into whichever way it unfolds.
             let reach = DetailCardLayout.width
@@ -65,17 +73,23 @@ final class FloatingPanelController {
                     // beside it. A card taller than the window gets sliced off
                     // flat against its edge, which reads as a drawing bug
                     // rather than as a card that didn't fit.
-                    height: max(DockLayout.maximumLength(on: .vertical, capacity: capacity), DetailCardLayout.maximumHeight)
+                    height: max(DockLayout.maximumLength(on: .vertical, capacity: capacity), cardHeight)
                 )
             case .horizontal:
+                // At a notch, the housing **and** the fillets either side of
+                // it, which sweep out past the housing into the screen edge.
+                // The housing alone left them cut off square whenever it was
+                // the widest thing — a few rings at the small size (205pt card
+                // against a 221pt housing).
+                let notchWidth = notchSize.map { $0.width + NotchBerthShape.filletRadius * 2 } ?? 0
                 return CGSize(
                     // Wide enough for whichever is wider, for the same reason.
-                    width: max(DockLayout.maximumLength(on: .horizontal, capacity: capacity), DetailCardLayout.width, notchSize?.width ?? 0),
-                    height: DockLayout.thickness(on: .horizontal)
+                    width: max(DockLayout.maximumLength(on: .horizontal, capacity: capacity), DetailCardLayout.width, notchWidth),
+                    height: DockLayout.thickness(on: .horizontal, docked: docked)
                         + (notchSize?.height ?? 0)
                         + DetailCardLayout.horizontalGap
                         + DetailCardLayout.pointerWidth
-                        + DetailCardLayout.maximumHeight
+                        + cardHeight
                 )
             }
         }
@@ -103,6 +117,8 @@ final class FloatingPanelController {
         self.store = store
         self.settings = settings
         self.placement = placement
+        placement.snapsToEdges = settings.snapsToEdges
+        placement.liquidDocking = settings.liquidDocking
 
         // The sliver has to be reachable without leaving the rail, or hiding
         // and showing chase each other forever. It is geometry, so it can be
@@ -113,7 +129,7 @@ final class FloatingPanelController {
             "the collapsed sliver escapes the rail's hit area — see PanelHitArea"
         )
 
-        let initialSize = Layout.size(for: placement.edge)
+        let initialSize = Layout.size(for: placement.edge, docked: placement.isDocked)
         panel = FloatingPanel(
             contentRect: NSRect(
                 x: 0,
@@ -195,8 +211,8 @@ final class FloatingPanelController {
         // rail's ends lose the flare's worth of padding the moment it comes off
         // an edge, and measuring the old state throws the placement off by that
         // much on the frame it changes.
-        panel.railSize = { [settings, store] edge, docked in
-            DockLayout.size(for: Self.shownSlotCount(settings, usage: { store.usage(for: $0) }), on: edge.axis, docked: docked)
+        panel.railSize = { [settings, store] axis, docked in
+            DockLayout.size(for: Self.shownSlotCount(settings, usage: { store.usage(for: $0) }), on: axis, docked: docked)
         }
         panel.grabArea = { [settings, store, placement] in
             if placement.notch != nil && !placement.isRailExpanded { return .zero }
@@ -219,7 +235,8 @@ final class FloatingPanelController {
             let slots = RailSlot.rail(
                 for: settings.shownAccounts,
                 isSplit: settings.isSplit,
-                groups: { RailSlot.modelGroups(of: store.usage(for: $0)) }
+                groups: { RailSlot.modelGroups(of: store.usage(for: $0)) },
+            shown: settings.shownModelGroups(for:)
             )
             guard let slot = PanelHitArea.slot(
                 at: point,
@@ -283,7 +300,13 @@ final class FloatingPanelController {
 
     /// Brings the panel in line with settings that were just changed.
     func settingsChanged() {
+        if placement.snapsToEdges != settings.snapsToEdges {
+            keepFreeRailInPlace(snaps: settings.snapsToEdges)
+        }
+        placement.snapsToEdges = settings.snapsToEdges
+        placement.liquidDocking = settings.liquidDocking
         applyCollectionBehavior()
+        applyScreenCapture()
         applyDisplayFollowing()
 
         if settings.isPanelVisible {
@@ -306,6 +329,21 @@ final class FloatingPanelController {
         panel.becomesKeyOnlyIfNeeded = true
         panel.applyLevel(for: placement.dock)
         applyCollectionBehavior()
+        applyScreenCapture()
+    }
+
+    /// Marked not to be captured when the setting asks. The window is sized
+    /// for the tallest card and mostly transparent, so a screenshot tool's
+    /// window selection finds a frame far larger than the rail.
+    ///
+    /// **A request, not a guarantee.** Apple says not to rely on `.none` to
+    /// keep a window out of capture: since macOS 15.4, ScreenCaptureKit can
+    /// still include it. Tools that read the sharing state skip it, which is
+    /// what the setting is for; it does not promise a recording or a shared
+    /// screen leaves the panel out, and its wording says so.
+    /// `.readOnly` is AppKit's default, which lets anything capture it.
+    private func applyScreenCapture() {
+        panel.sharingType = settings.hidesFromScreenCapture ? .none : .readOnly
     }
 
     /// Keeps the rail on every ordinary desktop Space while deciding separately
@@ -359,7 +397,8 @@ final class FloatingPanelController {
         RailSlot.rail(
             for: settings.shownAccounts,
             isSplit: settings.isSplit,
-            groups: { RailSlot.modelGroups(of: usage($0)) }
+            groups: { RailSlot.modelGroups(of: usage($0)) },
+            shown: settings.shownModelGroups(for:)
         ).count
     }
 
@@ -376,30 +415,74 @@ final class FloatingPanelController {
     /// account into two rings has no setting behind it and arrives through
     /// `PanelPlacement.railLengthChanged()`. Miss one and the window's rects
     /// stay measured against a rail that is no longer that long.
-    private func placePanel() {
-        // The display it was left on, if that display is still here. A monitor
-        // that has been unplugged falls back to one that exists rather than
-        // parking the panel in a space nobody can see.
-        guard let screen = PanelScreen.screen(withIdentifier: placement.display)
+    /// The display the panel was left on, if that display is still here. A
+    /// monitor that has been unplugged falls back to one that exists rather
+    /// than parking the panel in a space nobody can see.
+    private var placementScreen: NSScreen? {
+        PanelScreen.screen(withIdentifier: placement.display)
             ?? panel.screen ?? NSScreen.main ?? NSScreen.screens.first
+    }
+
+    /// Switching snapping changes the room a free rail's ratios are
+    /// fractions of (`PanelPlacement.room`), so the same ratios would put it
+    /// somewhere else — down onto the Dock, say, from just above it. They
+    /// are measured again from where the rail is now, kept inside the new
+    /// room, so it stays put or moves only as far as it has to.
+    private func keepFreeRailInPlace(snaps: Bool) {
+        guard
+            !placement.isDocked,
+            panel.isVisible,
+            let screen = placementScreen,
+            let rail = panel.railFrame?()
         else { return }
 
+        let room = PanelPlacement.room(
+            snaps: snaps, dock: placement.dock, visible: screen.visibleFrame, screen: screen.frame
+        )
+        // Bottom-left, as the drag measures it.
+        let origin = CGPoint(
+            x: min(max(panel.frame.minX + rail.minX, room.minX), room.maxX - rail.width),
+            y: min(max(panel.frame.maxY - rail.maxY, room.minY), room.maxY - rail.height)
+        )
+        let ratios = PanelPlacement.ratios(forRailAt: origin, in: room, rail: rail.size)
+        placement.record(
+            dock: placement.dock,
+            horizontalRatio: ratios.h,
+            verticalRatio: ratios.v,
+            display: placement.display
+        )
+    }
+
+    private func placePanel() {
+        guard let screen = placementScreen else { return }
+
         let edge = placement.edge
-        placement.notch = edge == .top ? PanelScreen.notch(of: screen) : nil
+        // The dock, not the edge: a rail standing free in the top half of the
+        // screen opens its card downwards too, and has no notch to sit in.
+        placement.notch = placement.dock == .edge(.top) ? PanelScreen.notch(of: screen) : nil
         let railSize = DockLayout.size(
             for: Self.shownSlotCount(settings, usage: { store.usage(for: $0) }),
             on: edge.axis,
             docked: placement.isDocked
         )
         let layout = placement.layout(
-            in: screen.visibleFrame,
+            in: placement.room(visible: screen.visibleFrame, screen: screen.frame),
             topEdge: FloatingPanel.topEdge(of: screen),
-            panel: Layout.size(for: edge, notchSize: placement.notch?.size),
+            bottomEdge: screen.frame.minY,
+            panel: Layout.size(for: edge, notchSize: placement.notch?.size, docked: placement.isDocked,
+                               cardHeight: DetailCardLayout.screenHeightLimit(in: screen.visibleFrame)),
             rail: railSize
         )
 
-        panel.applyLevel(for: placement.dock)
+        placement.cardRoom = PanelPlacement.cardRoom(
+            edge: edge, railOrigin: layout.railOrigin, rail: railSize, in: screen.visibleFrame
+        )
+        panel.applyLevel(
+            for: placement.dock,
+            beyond: PanelPlacement.isBeyond(screen.visibleFrame, railOrigin: layout.railOrigin, rail: railSize)
+        )
         panel.setFrame(layout.frame, display: true)
+        placement.setPanelFrame(panel.frame, visible: screen.visibleFrame)
         // **Measured against the frame the window actually got**, not the one
         // it was asked for. The panel is as tall as a rail with every account
         // on, which is taller than a laptop's usable screen, and AppKit will
@@ -472,9 +555,9 @@ private final class FloatingPanel: NSPanel {
     /// the rail's, and handing the placement a 20pt sliver where it expects a
     /// 64pt rail would throw the panel across the screen on the first drag.
     var railFrame: (() -> CGRect)?
-    /// The rail's size on a given edge, which the drag needs for an edge the
-    /// panel has not reached yet.
-    var railSize: ((PanelEdge, Bool) -> CGSize)?
+    /// The rail's size on a given axis, docked or not, which the drag needs
+    /// for a dock the panel has not reached yet.
+    var railSize: ((PanelEdge.Axis, Bool) -> CGSize)?
 
     /// Where a top-docked rail's top edge belongs: the display's physical top,
     /// less whatever a notch takes out of it.
@@ -504,8 +587,14 @@ private final class FloatingPanel: NSPanel {
     /// use — high enough to reach the edge, not so high that it covers system
     /// alerts. Nothing else about the panel changes, and off the top edge it
     /// goes back to floating so it never sits over the menu bar for nothing.
-    func applyLevel(for dock: PanelDock) {
-        level = dock.edge == .top ? .statusBar : .floating
+    ///
+    /// `beyond`: a free rail that reaches over the menu bar or the Dock
+    /// (snapping off, `PanelPlacement.isBeyond`) is raised the same way, or
+    /// it would be put there and drawn underneath.
+    func applyLevel(for dock: PanelDock, beyond: Bool = false) {
+        // Docked to the bottom it sits level with the Dock, beside it, and
+        // must not slip under it where the two meet.
+        level = dock.edge == .top || dock.edge == .bottom || beyond ? .statusBar : .floating
     }
     /// A short press that ended without moving the panel. The controller maps
     /// it to a provider ring; empty rail space remains drag-only.
@@ -520,6 +609,8 @@ private final class FloatingPanel: NSPanel {
     /// is in progress.
     private var grab: CGSize?
     private var pressedAt: CGPoint?
+    /// When that press began, for `PanelIntent.ringClickGuard`.
+    private var pressBegan: Date?
     private var didDrag = false
 
     override func sendEvent(_ event: NSEvent) {
@@ -576,10 +667,16 @@ private final class FloatingPanel: NSPanel {
         //
         // Screen coordinates run bottom-up, so the rail's bottom edge is its
         // distance from the window's top subtracted from the window's top.
-        let origin = CGPoint(x: frame.minX + rail.minX, y: frame.maxY - rail.maxY)
+        var origin = CGPoint(x: frame.minX + rail.minX, y: frame.maxY - rail.maxY)
+        // Against the rail as it is drawn: one still springing back onto its
+        // edge stands `pull` in from where the dock holds it.
+        if let placement, case .edge(let edge) = placement.dock, placement.pull > 0 {
+            origin = Self.moved(origin, into: edge, by: placement.pull)
+        }
         let pointer = NSEvent.mouseLocation
         grab = CGSize(width: pointer.x - origin.x, height: pointer.y - origin.y)
         pressedAt = location
+        pressBegan = Date()
         didDrag = false
         // From here the grab offset is fixed, so nothing may move the panel
         // until the button comes up — a re-place now is a jump on the first
@@ -606,6 +703,11 @@ private final class FloatingPanel: NSPanel {
         else { return false }
 
         let visible = screen.visibleFrame
+        // Where the rail may go: the usable area, or the whole screen with
+        // snapping off (`PanelPlacement.room`). Not asked of the placement,
+        // whose dock is still the one being left: a docked rail picked up
+        // with snapping off is free from the first frame.
+        let room = placement.snapsToEdges ? visible : screen.frame
         let rail = railFrame.size
 
         if !didDrag {
@@ -613,29 +715,86 @@ private final class FloatingPanel: NSPanel {
             placement.isDragging = true
         }
 
-        // Where the rail would like to be, kept wholly on screen.
+        // Where the rail would like to be, kept wholly in its room.
         let wanted = CGPoint(
-            x: min(max(pointer.x - grab.width, visible.minX), visible.maxX - rail.width),
-            y: min(max(pointer.y - grab.height, visible.minY), visible.maxY - rail.height)
+            x: min(max(pointer.x - grab.width, room.minX), room.maxX - rail.width),
+            y: min(max(pointer.y - grab.height, room.minY), room.maxY - rail.height)
         )
 
-        // Docking is decided *during* the drag, not on release: a snap that
-        // waited for mouse-up would jump the panel out from under the pointer.
-        //
-        // The top is tested against the **pointer**, not the rail. A rail
-        // standing on its end is most of the screen tall, so its top edge
-        // reaches the top of the display almost as soon as it is lifted at all
-        // — testing that would flip it on its side the moment it was picked
-        // up. Throwing the pointer at the top of the screen is the deliberate
-        // gesture, and it is the same one that reaches the menu bar.
-        let dock: PanelDock = if visible.maxY - pointer.y <= PanelPlacement.dockDistance {
-            .edge(.top)
-        } else if wanted.x - visible.minX <= PanelPlacement.dockDistance {
-            .edge(.left)
-        } else if visible.maxX - (wanted.x + rail.width) <= PanelPlacement.dockDistance {
-            .edge(.right)
-        } else {
-            .floating
+        // Where it lands is `PanelPlacement.dragDock`'s to say. The rail's
+        // bottom is the pointer's, not `wanted`'s: kept on screen, `wanted`
+        // never goes below the Dock, and a rail docked beside it is.
+        var dock = PanelPlacement.dragDock(
+            pointer: pointer,
+            rail: CGRect(origin: CGPoint(x: wanted.x, y: pointer.y - grab.height), size: rail),
+            screen: screen.frame,
+            visible: visible,
+            current: placement.dock,
+            axis: placement.edge.axis,
+            snaps: placement.snapsToEdges
+        )
+
+        // **A docked rail is pulled off, not dropped off** (`DropletTether`).
+        // It holds its edge until the pointer has carried it
+        // `breakDistance` away, drawn behind on a stretching neck; only then
+        // does it stand free. Another edge still wins at once: the pointer
+        // thrown at the top or a side is a deliberate move.
+        let previous = placement.dock
+        let topEdge = Self.topEdge(of: screen)
+        var pulled: CGFloat?
+        var parting = false
+        let liquid = placement.liquidDocking
+        if liquid, case .edge(let held) = previous, placement.snapsToEdges {
+            let elsewhere = if case .edge(let next) = dock { next != held } else { false }
+            let distance = PanelPlacement.distance(
+                from: held,
+                railOrigin: CGPoint(x: pointer.x - grab.width, y: pointer.y - grab.height),
+                rail: rail, screen: screen.frame, visible: visible,
+                topEdge: topEdge, notch: placement.notch
+            )
+            // **Letting go keeps the window where the dock put it** for
+            // `partingDuration`, so the parted neck's two pieces can be drawn
+            // drawing back while the rail already follows the hand inside
+            // it; only then does the rail stand free. Cut short if the rail
+            // would leave the window.
+            let inside = distance < Self.room(inside: held, rail: rail, notch: placement.notch, visible: visible) - 2
+            let now = CACurrentMediaTime()
+            if !elsewhere {
+                if let since = partingSince {
+                    if now - since < DropletTether.partingDuration && inside {
+                        dock = previous
+                        pulled = max(distance, 0)
+                        parting = true
+                    }
+                } else if distance < DropletTether.breakDistance {
+                    dock = previous
+                    pulled = max(distance, 0)
+                } else if inside {
+                    partingSince = now
+                    dock = previous
+                    pulled = max(distance, 0)
+                    parting = true
+                }
+            }
+        }
+        if !parting {
+            partingSince = nil
+            placement.parted = 0
+        }
+        // The neck thins with how hard the hand pulls, not only with how far
+        // the trailing rail has got, so a quick pull does not part a thick
+        // neck in one frame.
+        let lead: CGFloat = 20
+        placement.tension = pulled.map {
+            min(max(($0 - lead) / (DropletTether.breakDistance - lead), 0), 1)
+        } ?? 0
+        // Drawn onto an edge from standing free, the neck starts thin.
+        if liquid, case .floating = previous, dock.isDocked {
+            placement.thinning = DropletTether.attachThinning
+        }
+        // Letting go of one, the corners round off into the capsule.
+        if liquid, previous.isDocked, !dock.isDocked {
+            placement.fusion = 1
         }
 
         // The rail turns as it crosses onto the other axis, so everything from
@@ -643,22 +802,19 @@ private final class FloatingPanel: NSPanel {
         // one it is leaving. Measuring in the old one throws the panel across
         // the screen on the frame the axis changes.
         //
-        // Coming off the top, `placement.edge` is a frame behind — it still
-        // says `.top` until `record` below, which would size the window for
-        // the horizontal axis while the content has already redrawn as a
-        // vertical rail: 52pt of it sliced off, and the hit rect a hundred
-        // points from where the rail is. So a floating landing picks its side
-        // the same way the placement picks it, from the half it stands in.
-        let landing: PanelEdge = if let docked = dock.edge {
-            docked
-        } else if placement.edge.axis == .horizontal {
-            pointer.x < visible.midX ? .left : .right
-        } else {
-            placement.edge
+        // `placement.edge` is a frame behind until `record` below, so it is
+        // not asked which way the rail runs: sizing the window for the axis
+        // being left while the content has already redrawn on the new one
+        // slices 52pt off the rail and puts the hit rect a hundred points from
+        // where the rail is. The axis comes from the dock being landed on, and
+        // the edge — which only decides where the card opens — from the
+        // placement once it has been recorded.
+        let landingAxis: PanelEdge.Axis = switch dock {
+        case .edge(let edge): edge.axis
+        case .floating(let axis): axis
         }
-        let landingRail = railSize?(landing, dock.isDocked) ?? rail
-        let landingNotch = dock.edge == .top ? PanelScreen.notch(of: screen) : nil
-        let landingPanel = FloatingPanelController.Layout.size(for: landing, notchSize: landingNotch?.size)
+        let landingRail = railSize?(landingAxis, dock.isDocked) ?? rail
+        let landingNotch = dock == .edge(.top) ? PanelScreen.notch(of: screen) : nil
 
         // Under the pointer, in the new orientation. Carrying the old grab
         // offset across a quarter turn would put the rail somewhere the hand
@@ -670,7 +826,7 @@ private final class FloatingPanel: NSPanel {
         // dock↔float transition re-centre itself under the pointer for one
         // frame and snap back on the next. The grab is re-measured whenever
         // that does happen, or the frame after a turn would undo it.
-        let turned = landing.axis != placement.edge.axis
+        let turned = landingAxis != placement.edge.axis
 
         let origin: CGPoint
         if turned {
@@ -690,33 +846,251 @@ private final class FloatingPanel: NSPanel {
             let recentred = CGSize(width: grab.width - shrink.width, height: grab.height - shrink.height)
             self.grab = recentred
             origin = CGPoint(
-                x: min(max(pointer.x - recentred.width, visible.minX), visible.maxX - landingRail.width),
-                y: min(max(pointer.y - recentred.height, visible.minY), visible.maxY - landingRail.height)
+                x: min(max(pointer.x - recentred.width, room.minX), room.maxX - landingRail.width),
+                y: min(max(pointer.y - recentred.height, room.minY), room.maxY - landingRail.height)
             )
+            // The drawn rail keeps its centre too.
+            follow?.x += shrink.width
+            follow?.y += shrink.height
         } else {
             origin = wanted
         }
 
-        let ratios = PanelPlacement.ratios(forRailAt: origin, in: visible, rail: landingRail)
+        // Where the rail is to be drawn. Docked: where the dock holds it,
+        // moved in by the pull; free: where the pointer puts it. The window
+        // does not go there now — the follow spring carries it there, a
+        // frame at a time (`step`).
+        let held = restingOrigin(
+            dock: dock, origin: origin, rail: landingRail, notch: landingNotch,
+            room: room, screen: screen
+        )
+        var goal = held
+        if case .edge(let edge) = dock, let pulled {
+            // Parted, the rail is the hand's again: no more lag.
+            goal = Self.moved(held, into: edge, by: parting ? pulled : DropletTether.displayPull(for: pulled))
+        }
+        target = FollowTarget(
+            dock: dock, goal: goal, rest: held, rail: landingRail, notch: landingNotch,
+            room: room, screen: screen
+        )
+        settling = false
+        // Off, the rail goes where the pointer puts it, now, as it always did.
+        guard liquid else {
+            follow = nil
+            velocity = .zero
+            if let target { place(at: goal, on: target, persist: true) }
+            self.target = nil
+            return true
+        }
+        if turned || follow == nil {
+            follow = goal
+            velocity = .zero
+        }
+        startFollowing()
+        return true
+    }
+
+    // MARK: - Following the hand
+
+    /// Where the follow spring is carrying the rail, and on what.
+    private struct FollowTarget {
+        var dock: PanelDock
+        /// Where the rail is to be drawn: its bottom-left corner, in screen
+        /// coordinates.
+        var goal: CGPoint
+        /// Where the dock holds it with nothing pulling — where it settles
+        /// when the button comes up.
+        var rest: CGPoint
+        var rail: CGSize
+        var notch: CGRect?
+        var room: CGRect
+        var screen: NSScreen
+    }
+
+    private var target: FollowTarget?
+    /// Where the rail is drawn, bottom-left in screen coordinates, and how
+    /// fast it is moving. Nil when nothing is following.
+    private var follow: CGPoint?
+    private var velocity = CGVector.zero
+    /// The button is up: the rail is settling onto where it was left.
+    private var settling = false
+    private var link: CADisplayLink?
+    private var lastTick: CFTimeInterval?
+    /// When the neck parted, while the rail is letting go of its edge.
+    private var partingSince: CFTimeInterval?
+
+    /// How far a rail can be drawn in from `edge` and stay inside the window
+    /// the dock gives it.
+    private static func room(inside edge: PanelEdge, rail: CGSize, notch: CGRect?, visible: CGRect) -> CGFloat {
+        let panel = FloatingPanelController.Layout.size(
+            for: edge, notchSize: notch?.size, docked: true,
+            cardHeight: DetailCardLayout.screenHeightLimit(in: visible)
+        )
+        return edge.isVertical
+            ? panel.width - rail.width
+            : panel.height - rail.height - (notch?.height ?? 0)
+    }
+
+    /// The rail has let go: stand it free where it is drawn, the ends losing
+    /// the flare's padding about its centre, and carry it on from there.
+    private func standFree() {
+        partingSince = nil
+        guard let placement else { return }
+        placement.parted = 0
+        guard let target, let at = follow, case .edge(let edge) = target.dock else { return }
+        let axis = edge.axis
+        let free = railSize?(axis, false) ?? target.rail
+        let shrink = CGSize(width: (target.rail.width - free.width) / 2, height: (target.rail.height - free.height) / 2)
+        let origin = CGPoint(x: at.x + shrink.width, y: at.y + shrink.height)
+        let room = placement.snapsToEdges ? target.screen.visibleFrame : target.screen.frame
+        let margin = placement.sideMargin(for: axis)
+        // Kept in its room, which the spring then glides it into: above the
+        // Dock, for one let go of beside it.
+        let goal = CGPoint(
+            x: min(max(origin.x, room.minX + margin), room.maxX - free.width - margin),
+            y: min(max(origin.y, room.minY), room.maxY - free.height)
+        )
+        follow = origin
+        if let grab { self.grab = CGSize(width: grab.width - shrink.width, height: grab.height - shrink.height) }
+        self.target = FollowTarget(
+            dock: .floating(axis), goal: goal, rest: goal, rail: free, notch: nil,
+            room: room, screen: target.screen
+        )
+        placement.fusion = 1
+    }
+
+    /// **The rail follows the hand on a spring, not under it.** A drag event
+    /// only moves the goal; every frame of the display it is carried there
+    /// by `step`, which is what gives it weight: it trails a quick throw a
+    /// little and arrives without a jolt. Joining an edge, letting go of one
+    /// and settling back when the button comes up are the same spring
+    /// aiming somewhere else, so none of them needs an animation of its own.
+    ///
+    /// Driven by the screen's own display link, not a timer, which drifts out
+    /// of step with what is drawn (codenotch's finding; the spring figures
+    /// are theirs too: 0.2s response and 0.84 damping while carried, 0.3 and
+    /// 0.74 settling).
+    private func startFollowing() {
+        guard link == nil, let screen = target?.screen ?? self.screen ?? NSScreen.main else { return }
+        let link = screen.displayLink(target: self, selector: #selector(step(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+        lastTick = nil
+    }
+
+    private func stopFollowing() {
+        link?.invalidate()
+        link = nil
+        lastTick = nil
+    }
+
+    @objc private func step(_ link: CADisplayLink) {
+        guard var target, var at = follow, let placement else { stopFollowing(); return }
+        let now = link.targetTimestamp
+        let dt = min(max(now - (lastTick ?? now - 1.0 / 60), 0), 1.0 / 30)
+        lastTick = now
+
+        // The rail can change size while it follows — a ring added by a
+        // refresh, the panel size changed — and is placed at its size now.
+        let axis: PanelEdge.Axis = switch target.dock {
+        case .edge(let edge): edge.axis
+        case .floating(let axis): axis
+        }
+        if let current = railSize?(axis, target.dock.isDocked), current != target.rail {
+            target.rail = current
+            self.target = target
+        }
+
+        let goal = settling ? target.rest : target.goal
+        let (response, damping): (CGFloat, CGFloat) = settling ? (0.3, 0.74) : (0.2, 0.84)
+        let omega = 2 * CGFloat.pi / response
+        // Two semi-implicit Euler half-steps a frame: stable at any rate the
+        // display runs at.
+        let half = CGFloat(dt) / 2
+        for _ in 0..<2 {
+            velocity.dx += (-omega * omega * (at.x - goal.x) - 2 * damping * omega * velocity.dx) * half
+            velocity.dy += (-omega * omega * (at.y - goal.y) - 2 * damping * omega * velocity.dy) * half
+            at.x += velocity.dx * half
+            at.y += velocity.dy * half
+        }
+        follow = at
+        place(at: at, on: target)
+
+        // A parted neck draws back, then the rail stands free: under the
+        // hand if it is still held, where it is if not.
+        if let since = partingSince {
+            let progress = min(CGFloat((now - since) / DropletTether.partingDuration), 1)
+            placement.parted = 1 - (1 - progress) * (1 - progress)
+            if progress >= 1 {
+                if grab == nil || !carry() { standFree() }
+                // The target has just been replaced; the rest of this frame
+                // was worked out for the old one. The next frame carries on.
+                return
+            }
+        }
+
+        // The neck's thinning and the corners' fusion ease out on their own.
+        placement.thinning *= exp(-CGFloat(dt) / 0.22)
+        placement.fusion *= exp(-CGFloat(dt) / 0.14)
+        if placement.thinning < 0.005 { placement.thinning = 0 }
+        if placement.fusion < 0.005 { placement.fusion = 0 }
+        placement.motion = velocity
+
+        let still = hypot(at.x - goal.x, at.y - goal.y) < 0.3 && hypot(velocity.dx, velocity.dy) < 6
+        if settling && still && partingSince == nil && placement.thinning == 0 && placement.fusion == 0 {
+            stopFollowing()
+            follow = nil
+            velocity = .zero
+            settling = false
+            placement.motion = .zero
+            placement.tension = 0
+            place(at: target.rest, on: target, persist: true)
+            placement.pull = 0
+            self.target = nil
+        }
+    }
+
+    /// Puts the window where a rail drawn at `origin` (bottom-left, screen
+    /// coordinates) belongs on `target`'s dock, and the rest of the way —
+    /// what a docked rail stands in from its edge — into the pull.
+    /// `persist`: written to disk as well, which the follow does only when it
+    /// stops — not on each of the display's frames.
+    private func place(at origin: CGPoint, on target: FollowTarget, persist: Bool = false) {
+        guard let placement else { return }
+        let visible = target.screen.visibleFrame
+        let ratios = PanelPlacement.ratios(forRailAt: origin, in: target.room, rail: target.rail)
         placement.record(
-            dock: dock,
+            dock: target.dock,
             horizontalRatio: ratios.h,
             verticalRatio: ratios.v,
-            display: PanelScreen.identifier(of: screen)
+            display: PanelScreen.identifier(of: target.screen),
+            persist: persist
         )
 
-        placement.notch = landingNotch
+        placement.notch = target.notch
+        let panelSize = FloatingPanelController.Layout.size(
+            for: placement.edge, notchSize: target.notch?.size, docked: target.dock.isDocked,
+            cardHeight: DetailCardLayout.screenHeightLimit(in: visible)
+        )
 
         // One source of truth for the geometry: ask the placement where that
         // puts things rather than working it out a second way here.
         let layout = placement.layout(
-            in: visible,
-            topEdge: Self.topEdge(of: screen),
-            panel: landingPanel,
-            rail: landingRail
+            in: target.room,
+            topEdge: Self.topEdge(of: target.screen),
+            bottomEdge: target.screen.frame.minY,
+            panel: panelSize,
+            rail: target.rail
         )
-        applyLevel(for: dock)
+        placement.cardRoom = PanelPlacement.cardRoom(
+            edge: placement.edge, railOrigin: layout.railOrigin, rail: target.rail, in: visible
+        )
+        applyLevel(
+            for: target.dock,
+            beyond: PanelPlacement.isBeyond(visible, railOrigin: layout.railOrigin, rail: target.rail)
+        )
         setFrame(layout.frame, display: true)
+        placement.setPanelFrame(frame, visible: visible)
         // Same rule as `placePanel`: the frame is a request, and on a screen
         // the panel does not fit the rail has to be measured against what the
         // window was actually given, or it slides out from under the pointer
@@ -724,17 +1098,86 @@ private final class FloatingPanel: NSPanel {
         let offsets = PanelPlacement.offsets(
             forRailTopLeft: layout.railOrigin,
             in: frame,
-            rail: landingRail
+            rail: target.rail
         )
         placement.setRailOffset(top: offsets.top, leading: offsets.leading)
-        return true
+
+        if case .edge(let edge) = target.dock {
+            let held = CGPoint(x: layout.railOrigin.x, y: layout.railOrigin.y - target.rail.height)
+            placement.pull = max(Self.inward(from: held, to: origin, on: edge), 0)
+        } else {
+            placement.pull = 0
+        }
+    }
+
+    /// Where `dock` holds a rail the pointer has put at `origin`: its
+    /// bottom-left corner, in screen coordinates.
+    private func restingOrigin(
+        dock: PanelDock, origin: CGPoint, rail: CGSize, notch: CGRect?, room: CGRect, screen: NSScreen
+    ) -> CGPoint {
+        guard let placement, dock.isDocked else { return origin }
+        let ratios = PanelPlacement.ratios(forRailAt: origin, in: room, rail: rail)
+        placement.record(
+            dock: dock, horizontalRatio: ratios.h, verticalRatio: ratios.v,
+            display: PanelScreen.identifier(of: screen), persist: false
+        )
+        placement.notch = notch
+        let layout = placement.layout(
+            in: room,
+            topEdge: Self.topEdge(of: screen),
+            bottomEdge: screen.frame.minY,
+            panel: FloatingPanelController.Layout.size(
+                for: placement.edge, notchSize: notch?.size, docked: true,
+                cardHeight: DetailCardLayout.screenHeightLimit(in: screen.visibleFrame)
+            ),
+            rail: rail
+        )
+        return CGPoint(x: layout.railOrigin.x, y: layout.railOrigin.y - rail.height)
+    }
+
+    /// `point` moved `distance` off `edge`, into the screen.
+    private static func moved(_ point: CGPoint, into edge: PanelEdge, by distance: CGFloat) -> CGPoint {
+        switch edge {
+        case .right: CGPoint(x: point.x - distance, y: point.y)
+        case .left: CGPoint(x: point.x + distance, y: point.y)
+        case .top: CGPoint(x: point.x, y: point.y - distance)
+        case .bottom: CGPoint(x: point.x, y: point.y + distance)
+        }
+    }
+
+    /// How far `point` stands in from `held` off `edge`.
+    private static func inward(from held: CGPoint, to point: CGPoint, on edge: PanelEdge) -> CGFloat {
+        switch edge {
+        case .right: held.x - point.x
+        case .left: point.x - held.x
+        case .top: held.y - point.y
+        case .bottom: point.y - held.y
+        }
     }
 
     private func finish() -> Bool {
         guard grab != nil else { return false }
-        let click = didDrag ? nil : pressedAt
+        // A press that began before the rings had been out for
+        // `ringClickGuard` was aimed at whatever was under the pointer
+        // before they appeared: it can still carry the panel, but it is not
+        // a click on a ring.
+        let aimed = pressBegan.map {
+            PanelIntent.acceptsRingClick(pressedAt: $0, railOpenedAt: placement?.railOpenedAt)
+        } ?? false
+        let click = didDrag || !aimed ? nil : pressedAt
         grab = nil
         pressedAt = nil
+        pressBegan = nil
+        // The spring carries on to where the rail was left: back onto its
+        // edge if it was pulled short of the break.
+        if didDrag, target != nil {
+            // Let go of mid-parting, it stays where it is drawn and stands
+            // free there once the pieces have drawn back.
+            if partingSince != nil, let goal = target?.goal { target?.rest = goal }
+            placement?.tension = 0
+            settling = true
+            startFollowing()
+        }
         didDrag = false
         placement?.isDragging = false
         placement?.isPressed = false

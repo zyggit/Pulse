@@ -8,14 +8,20 @@ Why enter/leave are split, why the window owns the drag, and the Liquid Glass ep
 
 ## Hover (open / close the card)
 
+`FloatingUsagePanelView` builds rail readings from observed store/settings inputs; `FloatingUsagePanelContent` owns pointer, hover and card state below it. Layout and pointer hit tests share the same entry array, so pointer samples do not reconstruct account slots, labels and quota readings.
+
 Two `NSViewRepresentable` backgrounds:
 
 - `PointerEntryReporter` — `.activeAlways` `NSTrackingArea`, reports **only entering** a ring.
-- `PanelPointerWatcher` — samples `NSEvent.mouseLocation` on a timer. `FloatingUsagePanelView.isOverContent` tests against the **rail and the card**, not the window frame (the panel is full-size and mostly transparent).
+- `PanelPointerWatcher` — samples `NSEvent.mouseLocation` on a timer. `FloatingUsagePanelContent.isOverContent` tests against the **rail and the card**, not the window frame (the panel is full-size and mostly transparent).
 
-For a top-docked notch rail, an unpainted `PointerEntryReporter` covers exactly the physical housing rectangle and calls the existing `show()` method on entry. It does not claim clicks. The same rectangle is included in `isOverContent`, so the ordinary 150ms sampler can also open and retain the rail. There is no separate dwell timer. The hidden rail has no sliver or grab target. Once expanded, the full surface from the screen top through the added bottom padding counts as content. One derived `isNotchHeld` state covers a press, drag, or open menu; releasing the last of these re-evaluates the pointer so a stationary pointer cannot leave it stuck open.
+For a top-docked notch rail, an unpainted `PointerEntryReporter` covers exactly the physical housing rectangle (`PanelIntent.notchHousing`). **Arriving there does not open the rail; staying does.** Entry — from the tracking area, or from a sample that finds the pointer there, for a pointer that was already inside when the area was installed — arms `armNotch`, which waits `PanelIntent.notchDwell` (250ms) and then opens only if the pointer is still in the housing *at that moment*, read through `PointerProbe` rather than the last sample (which can be 150ms old, most of the wait). A sample outside the housing calls the wait off. The housing sits on the way between the two halves of the menu bar, so opening on entry put the rail over whatever the pointer was heading for. Nothing in the wait closes anything, so the enter-only rule below still holds. The housing counts in `isOverContent` only once the rail is out, where it holds the rail open like the rest of its surface. The hidden rail has no sliver or grab target. Once expanded, the full surface from the screen top through the added bottom padding counts as content. One derived `isNotchHeld` state covers a press, drag, or open menu; releasing the last of these re-evaluates the pointer so a stationary pointer cannot leave it stuck open.
+
+**A ring click needs the rail to have been out for `PanelIntent.ringClickGuard` (300ms)**, measured from mouse-down against `placement.railOpenedAt`. A press sooner than that was started at whatever was under the pointer before the rings appeared. It still picks up the panel; only the refresh is dropped. Every dock, not just the notch.
 
 **Do not close on exit events.** Views appearing, moving, or animating under a stationary pointer fire spurious exits; closing reopens; it loops. Enter from tracking areas, leave from sampling the real pointer. That loop is then structurally impossible.
+
+**Samples are deduplicated, so whatever opens the panel by another path asks for a fresh one** (`PointerProbe.reportAgain`). A ring's enter can arrive late — queued behind a busy main thread, or for a ring crossed between two samples — after the sampler has already reported the pointer gone; every later sample was that same "gone", so the card stayed open until the pointer came back and left again. Now `select` opens nothing unless the pointer is on the content **now** (`pointerProbe`; refusing closes nothing, so no loop), and `select`, `show`, the end of a drag and the menu closing each have the next sample report the pointer even if it has not moved.
 
 The sliver’s tracking area cannot be the only way `isHovered` gets set: a floating panel dragged onto an edge docks with `isHovered` still false and snaps shut in the hand. `pointerMoved` sets it from the same test that decides when to hide.
 
@@ -35,7 +41,7 @@ The window is handed **two** rects: `grabArea` (rail, or sliver when collapsed) 
 
 Same window-level path. `FloatingPanel` records the press, marks a drag only after a real `leftMouseDragged`, reports a click on mouse-up otherwise. The press also sets `placement.isPressed`, and **nothing may move the panel while that is set** — not merely while `isDragging` is. The grab offset is measured at mouse-down, so a re-place in the gap before the first movement does not slide the panel, it makes it jump by that much on the frame the pointer first travels. `PanelHoldTests` pins it. `PanelHitArea.slot(at:)` accepts only the visible circle; labels and berth gaps stay drag-only. It indexes **slots**, not accounts — a split provider draws two rings from one login, so counting accounts aims every click after the split at the wrong ring. The controller builds the same list the panel draws from, through `RailSlot.rail(for:isSplit:groups:)`.
 
-Click starts a provider-scoped refresh. `UsageStore.isRefreshing` : the usage arc **dims but does not move**; a short bright segment travels around. Do not rotate the usage arc (at 0% there is no arc; at 95% a rotated arc looks still; it also takes the gauge away). Travelling mark is usage colour, not white (white is the CLI-activity mark). Hold at least 650ms so a local read still registers. Keep the physical click here; `sendEvent` takes the press before SwiftUI. Default accessibility action can still live on the ring.
+Click starts an account-scoped refresh. `UsageStore.isRefreshing` : the usage arc **dims but does not move**; a short bright segment travels around. Do not rotate the usage arc (at 0% there is no arc; at 95% a rotated arc looks still; it also takes the gauge away). Travelling mark is usage colour, not white (white is the CLI-activity mark). Hold at least 650ms so a local read still registers. Keep the physical click here; `sendEvent` takes the press before SwiftUI. Default accessibility action can still live on the ring.
 
 A click is matched against the **displayed slots** the controller builds through `RailSlot.rail(for:isSplit:groups:)`, not `Provider.allCases`.
 
@@ -45,7 +51,7 @@ A click is matched against the **displayed slots** the controller builds through
 
 Taken in `sendEvent` rather than with SwiftUI's `.contextMenu`, for the reason every other press is: this is a non-key accessory panel and SwiftUI's own input handling is not reliable on it.
 
-`AppDelegate.panelMenu()` builds it — settings, quit, and an available update — and builds it **fresh on every click**, so an update found since the last one is on it. The menu exists because a full menu bar is where Pulse's icon stops being reachable ([issue #24](https://github.com/qunqin24/Pulse/issues/24)).
+`AppDelegate.panelMenu()` builds it — the menu bar menu's plain items: Show floating panel, Settings…, Quit, and an available update — and builds it **fresh on every click**, so an update found since the last one is on it. The menu exists because a full menu bar is where Pulse's icon stops being reachable ([issue #24](https://github.com/qunqin24/Pulse/issues/24)).
 
 `placement.isMenuOpen` is set for the span of `popUp`, which runs its own tracking loop. Without it the pointer is on the menu — off the panel by every test `pointerMoved` makes — and the rail winds down to its sliver the moment the menu appears beside it. `scheduleHide` guards on it exactly as it guards on `isDragging`, and re-arms the same way.
 

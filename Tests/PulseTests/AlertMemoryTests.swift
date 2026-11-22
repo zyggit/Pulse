@@ -442,7 +442,7 @@ struct AlertMemoryTests {
     @Test("A credential that went bad is a failure")
     func badCredentialsAreFailures() {
         for reason: ProviderUsage.Unavailability in [
-            .claudeLoginExpired, .cursorLoginExpired, .grokLoginExpired,
+            .claudeLoginExpired, .cursorLoginExpired, .cursorKeyRefused, .grokLoginExpired,
             .signedOut, .apiKeyRefused, .serverError
         ] {
             var memory = AlertMemory()
@@ -756,8 +756,10 @@ struct NotificationAuthorizationTests {
     @Test("An in-flight grant does not consume readings, and concurrent requests share it", arguments: [true, false])
     func pendingAuthorizationDoesNotConsumeWarning(granted: Bool) async throws {
         let file = FileManager.default.temporaryDirectory.appending(path: "pulse-permission-\(UUID()).json")
+        // Never the real `status-alerts.json`.
+        let outages = FileManager.default.temporaryDirectory.appending(path: "pulse-outages-\(UUID()).json")
         let settings = AppSettings(alertThreshold: .ninety)
-        let alerts = UsageAlerts(settings: settings, file: file)
+        let alerts = UsageAlerts(settings: settings, file: file, outageFile: outages)
         var finish: CheckedContinuation<Bool, Never>?
         let first = Task {
             await alerts.requestAuthorizationIfNeeded {

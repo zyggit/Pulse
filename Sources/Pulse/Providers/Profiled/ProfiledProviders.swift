@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 extension Provider {
@@ -7,6 +8,7 @@ extension Provider {
     var profile: ProviderProfile? {
         switch self {
         case .clinePass: .clinePass
+        case .dimAgent: .dimAgent
         case .alibabaCodingPlan: .alibabaCodingPlan
         case .alibabaTokenPlan: .alibabaTokenPlan
         case .qwenCloud: .qwenCloud
@@ -58,6 +60,7 @@ extension Provider {
         case .replicate: .replicate
         case .typeSafe: .typeSafe
         case .vercelAIGateway: .vercelAIGateway
+        case .openDesign: .openDesign
         default: nil
         }
     }

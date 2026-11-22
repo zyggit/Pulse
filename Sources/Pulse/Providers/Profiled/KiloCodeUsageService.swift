@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Kilo Code: the account's credit balance, and the Kilo Pass allowance for
@@ -200,10 +201,6 @@ enum KiloCodeUsageService {
     }
 
     static func money(_ wallet: ProviderUsage.CreditAmount) -> String {
-        wallet.amount.formatted(
-            .currency(code: wallet.currency)
-                .precision(.fractionLength(2))
-                .locale(LocalizationSource.locale)
-        )
+        wallet.amount.formatted(Money.reportedStyle(wallet.currency))
     }
 }

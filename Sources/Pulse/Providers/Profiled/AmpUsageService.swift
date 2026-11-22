@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Amp, the coding agent: its free daily allowance, a paid tier's monthly
@@ -229,11 +230,7 @@ enum AmpUsageService {
     }
 
     static func dollars(_ amount: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        formatter.locale = LocalizationSource.locale
-        return formatter.string(from: NSNumber(value: amount)) ?? "$\(amount)"
+        return Money.reported(amount, code: "USD")
     }
 
     /// Terminal colour codes and Markdown bold, which the text may carry.

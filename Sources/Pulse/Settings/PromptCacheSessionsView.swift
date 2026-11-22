@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import SwiftUI
 
 /// Every Claude Code conversation whose prompt cache is still alive, soonest
@@ -8,11 +9,16 @@ import SwiftUI
 /// the tails of the files written in the last hour — and counted down in
 /// between, so a conversation that lapses drops off without waiting for a read.
 struct PromptCacheSessionsGroup: View {
+    let provider: Provider
     @State private var reading: PromptCacheReading?
+    /// Whose conversations `reading` holds.
+    @State private var readFor: Provider?
 
     /// A reading to start from, for a preview; the pane reads its own.
-    init(reading: PromptCacheReading? = nil) {
+    init(provider: Provider, reading: PromptCacheReading? = nil) {
+        self.provider = provider
         _reading = State(initialValue: reading)
+        _readFor = State(initialValue: reading == nil ? nil : provider)
     }
 
     var body: some View {
@@ -23,15 +29,26 @@ struct PromptCacheSessionsGroup: View {
                 }
             }
 
-            Text(localized: "Read from Claude Code's own records: each reply says whether it cached for an hour or five minutes, and a cache lasts that long from the last request that used it. That is the time if nothing before it has changed — switching model, changing tools or compacting starts a new cache. Subagents keep caches of their own and are not listed.")
+            Text(String.localized("Read from Claude Code's own records: each reply says whether it cached for an hour or five minutes, and a cache lasts that long from the last request that used it. That is the time if nothing before it has changed — switching model, changing tools or compacting starts a new cache. Subagents keep caches of their own and are not listed."))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 4)
         }
-        .task {
+        // **Keyed by provider.** SwiftUI keeps this view in place when the
+        // pane moves to another provider, so a bare `.task` neither restarted
+        // nor let go of the reading — Codex's pane, when it had this group,
+        // listed Claude Code's conversations.
+        .task(id: provider) {
+            if readFor != provider { reading = nil }
             while !Task.isCancelled {
-                reading = await Task.detached(priority: .utility) { ClaudePromptCache.read() }.value
+                let provider = provider
+                let read = await Task.detached(priority: .utility) { PromptCacheReading.read(for: provider) }.value
+                // A detached read outlives the task that started it; one that
+                // lands after the pane moved to another provider is dropped.
+                guard !Task.isCancelled else { return }
+                reading = read
+                readFor = provider
                 try? await Task.sleep(for: .seconds(30))
             }
         }
@@ -39,6 +56,7 @@ struct PromptCacheSessionsGroup: View {
 
     @ViewBuilder
     private func content(at now: Date) -> some View {
+        let reading = readFor == provider ? reading : nil
         let live = (reading?.live ?? []).filter { $0.lapse.expiresAt > now }
         if reading == nil {
             SettingsRow(String.localized("Reading local records…")) {
@@ -53,7 +71,7 @@ struct PromptCacheSessionsGroup: View {
             ForEach(Array(live.enumerated()), id: \.element.id) { index, session in
                 if index > 0 { SettingsRowDivider() }
                 SettingsRow(
-                    session.title ?? session.project ?? String.localized("Untitled conversation"),
+                    session.displayName,
                     subtitle: subtitle(session)
                 ) {
                     Text(verbatim: String.localized("\(PromptCacheLapse.duration(session.lapse.expiresAt.timeIntervalSince(now))) left"))
@@ -71,7 +89,9 @@ struct PromptCacheSessionsGroup: View {
     /// title is something else.
     private func subtitle(_ session: PromptCacheSession) -> String {
         var parts: [String] = []
-        if session.title != nil, let project = session.project { parts.append(project) }
+        if SessionLabel.namesItself(title: session.title, isReview: false), let project = session.project {
+            parts.append(project)
+        }
         parts.append(String.localized("\(PromptCacheLapse.duration(session.lapse.lifetime)) cache"))
         parts.append(String.localized("Last used \(Self.time(session.lapse.lastRequest))"))
         return parts.joined(separator: " · ")

@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import AppKit
 
 /// How the menu bar item draws the account it speaks for.
@@ -157,18 +158,18 @@ extension MenuBarReading {
         label: String?,
         subscriptionPrice: Double? = nil,
         subscriptionCurrency: String = "USD",
+        icons: ExtensionIcons? = nil,
         on button: NSStatusBarButton
     ) {
         guard let reading else {
-            button.image = NSImage(systemSymbolName: "chart.pie.fill", accessibilityDescription: "Pulse")
-            button.image?.isTemplate = true
+            button.image = pulseMark(height: 16)
             button.attributedTitle = NSAttributedString()
             button.imagePosition = .imageOnly
             button.toolTip = "Pulse"
             return
         }
 
-        let mark = markImage(for: reading.account.provider, size: 15)
+        let mark = markImage(for: reading.account, size: 15, icons: icons)
         let tooltipFigure: String
         if let window = reading.window {
             tooltipFigure = remaining
@@ -221,14 +222,56 @@ extension MenuBarReading {
         button.attributedTitle = NSAttributedString(string: " " + reading.text(remaining: remaining), attributes: attributes)
     }
 
-    /// A provider's mark at a menu's size. A copy: the store's image is shared,
-    /// and large.
+    /// Pulse's own mark — the app icon's P, one stroke — as a template, so
+    /// the menu bar colours it like every other item there. Drawn from
+    /// `AppIcon/pulse-mark.svg`'s path rather than shipped as a file: one
+    /// stroke, a 100-unit pen with round ends, bounds 302–762 × 194–830.
     @MainActor
-    static func markImage(for provider: Provider, size: CGFloat) -> NSImage? {
-        let mark = (LobeIconStore.image(for: provider)?.copy() as? NSImage)
-            ?? NSImage(systemSymbolName: "chart.pie.fill", accessibilityDescription: nil)
-        mark?.size = NSSize(width: size, height: size)
-        mark?.isTemplate = true
+    static func pulseMark(height: CGFloat) -> NSImage {
+        let bounds = NSRect(x: 302, y: 194, width: 460, height: 636)
+        let scale = height / bounds.height
+        let image = NSImage(size: NSSize(width: (bounds.width * scale).rounded(.up), height: height), flipped: false) { _ in
+            let transform = NSAffineTransform()
+            transform.scale(by: scale)
+            transform.translateX(by: -bounds.minX, yBy: -bounds.minY)
+            transform.concat()
+            // The SVG's y runs down; here it runs up, so every y is 1024 − y.
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: 352, y: 244))
+            path.line(to: NSPoint(x: 352, y: 780))
+            path.line(to: NSPoint(x: 562, y: 780))
+            path.appendArc(withCenter: NSPoint(x: 562, y: 630), radius: 150, startAngle: 90, endAngle: -90, clockwise: true)
+            path.line(to: NSPoint(x: 530, y: 480))
+            path.lineWidth = 100
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            NSColor.black.setStroke()
+            path.stroke()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Pulse"
+        return image
+    }
+
+    /// Fits a mark inside the menu's square without resizing a cached image.
+    /// Bundled marks stay templates; extension artwork keeps its own colours.
+    @MainActor
+    static func markImage(for account: AccountKey, size: CGFloat, icons: ExtensionIcons? = nil) -> NSImage? {
+        guard let source = icons?.image(for: account) ?? LobeIconStore.image(for: account.provider) else {
+            let fallback = NSImage(systemSymbolName: "chart.pie.fill", accessibilityDescription: nil)
+            fallback?.size = NSSize(width: size, height: size)
+            fallback?.isTemplate = true
+            return fallback
+        }
+        let mark = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let scale = min(rect.width / source.size.width, rect.height / source.size.height)
+            let fitted = NSSize(width: source.size.width * scale, height: source.size.height * scale)
+            source.draw(in: NSRect(x: rect.midX - fitted.width / 2, y: rect.midY - fitted.height / 2,
+                                   width: fitted.width, height: fitted.height))
+            return true
+        }
+        mark.isTemplate = source.isTemplate
         return mark
     }
 
@@ -263,7 +306,7 @@ extension MenuBarReading {
     }
 
     /// The mark and the ring side by side as one image. Not a template: the
-    /// ring may be red. The mark is drawn in `labelColor` to match.
+    /// ring may be red. Only template marks are tinted to `labelColor`.
     private static func combined(_ mark: NSImage?, _ ring: NSImage) -> NSImage {
         let gap: CGFloat = 4
         let markWidth = mark?.size.width ?? 0
@@ -272,8 +315,10 @@ extension MenuBarReading {
             if let mark {
                 let tinted = NSImage(size: mark.size, flipped: false) { markRect in
                     mark.draw(in: markRect)
-                    NSColor.labelColor.set()
-                    markRect.fill(using: .sourceAtop)
+                    if mark.isTemplate {
+                        NSColor.labelColor.set()
+                        markRect.fill(using: .sourceAtop)
+                    }
                     return true
                 }
                 tinted.draw(in: NSRect(origin: .zero, size: mark.size))

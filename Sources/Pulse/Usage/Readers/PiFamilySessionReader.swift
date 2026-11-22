@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// The Pi transcript, shared by Pi, omp, Senpi and Kimchi.
@@ -272,6 +273,7 @@ enum PiFamilySessionReader {
                             client: client, configuration: configuration,
                             sessionID: sessionID, message: message
                         ),
+                        provider: message.provider ?? configuration.providerFallback,
                         unclassifiedTokens: message.unclassified
                     )
                 )

@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import AppKit
 import SwiftUI
 
@@ -51,27 +52,6 @@ struct UsageRingView: View {
     /// mark, no refresh sweep, and the usage arc stays at full opacity while
     /// a reading is fetched instead of dimming for the turn to sit in.
     var animatesActivity: Bool = true
-    /// Whether this ring's logo is replaced by an animated mark, which is a
-    /// per-account choice — see `AppSettings.botMarks`.
-    var showsBotMark: Bool = false
-    /// The mark's body colour, dealt across the rail so no two rings next to
-    /// each other look alike. Nil falls back to this provider's own colour,
-    /// for the places that draw one ring on its own.
-    var botTint: Color?
-    /// Which character the mark is. Nil means whichever the rail dealt it.
-    var botPersona: BotMarkPersona?
-    /// The shape the mark wears. Round unless the reader picked otherwise.
-    var botBody: BotMarkBody = .default
-    /// Which way the mark looks, which the rail's edge decides.
-    var botGaze: BotMarkGaze = .ahead
-    /// A one-shot the mark plays once: a limit reset, a turn finished.
-    var botEvent: BotMarkEvent?
-    /// The pointer in panel coordinates. The mark works out where that is
-    /// relative to itself and looks at it.
-    var botPointer: CGPoint?
-    /// Whether no CLI has written for a while. Only the sleepy persona uses
-    /// this for its occasional night-time doze.
-    var botQuiet = false
     /// Whether this ring is the one being pointed at.
     var highlight: Bool = false
     /// How much of the window clock to draw, 0...1, or nil to leave it out.
@@ -100,6 +80,14 @@ struct UsageRingView: View {
     /// next person who forgets it is told.
     let secondFraction: Double?
     let secondIsSpent: Bool
+    /// An Open Bot Avatar figure in place of the provider's mark, or nil for the mark.
+    /// Per account, off by default (`AppSettings.robotAccounts`).
+    var robot: RobotCue?
+    /// False while the rail is collapsed, which stops the robot's timeline.
+    var isLive: Bool = true
+    /// The account this ring belongs to, so an extension's own icon is found
+    /// for it. Nil draws the provider's bundled mark.
+    var account: AccountKey?
 
     @State private var spinning = false
     @State private var refreshSpinning = false
@@ -113,28 +101,19 @@ struct UsageRingView: View {
     /// The icon's share of that dark disc. Sizing the icon from the disc
     /// rather than from the full diameter keeps the margin around it steady
     /// even if the ring's stroke gets thicker or thinner.
-    private static let iconScale: CGFloat = 0.8
-
-    /// The animated mark's share of the same disc, which is **larger than a
-    /// logo's on purpose** — and larger than the disc itself.
     ///
-    /// Two things make a mark look smaller than the glyph it replaced. It
-    /// draws into the upstream's viewBox, 259 units around a 229-unit body, so
-    /// an eleventh of its canvas is margin the character moves inside — the
-    /// idle bob, the lean, the squash. And a logo is a flat shape that reads
-    /// at any size, where a face needs room for two eyes to be two eyes.
-    ///
-    /// So the mark is sized against the **ring's inner edge** rather than the
-    /// disc: at 1.4 the canvas is the full 28pt inside a standard 36pt ring,
-    /// which puts the body at about 25pt with 1.6pt of clearance from the
-    /// stroke. That is wider than the 20pt disc behind it, deliberately — the
-    /// disc is near-black on a near-black rail and reads as a shadow, while
-    /// the ring is the edge a reader actually sees. The gap the activity mark
-    /// used to ride is free here: a ring drawing a mark does not draw that arc.
-    ///
-    /// It still scales with the disc, so the 2pt a side the disc gives up to
-    /// the second ring takes the mark with it and the two cannot collide.
-    private static let botScale: CGFloat = 1.4
+    /// The whole disc: 0.8 read small beside the robot, and 0.9 and 1.0 were
+    /// drawn side by side and 1.0 was picked. The cost, accepted: a busy
+    /// ring's activity arc and a second ring both pass close to the glyph.
+    private static let iconScale: CGFloat = 1.0
+    /// The figure's 0 0 100 100 box against the same disc: **wider than the
+    /// disc**. Open Bot Avatar keeps a figure within about 8…92 of its box
+    /// and leaves the rest for turning and hopping, so the box is drawn
+    /// larger for the figure to read as large as a logo. It may spread into
+    /// the band between the disc and the usage ring because a ring with a
+    /// figure draws no activity arc there. With a second ring that band is
+    /// taken, so it is drawn at the disc's size.
+    private var robotScale: CGFloat { secondFraction == nil ? 1.35 : 1.1 }
 
     private var centreDiameter: CGFloat {
         // The disc gives up two points a side to the second ring, which needs
@@ -182,8 +161,8 @@ struct UsageRingView: View {
 
     /// The clock arc's own geometry, measured out from the usage ring's outer
     /// edge. The rail is far wider than a ring — 64pt against 36 at standard
-    /// scale — so this costs the layout nothing; the rail's length, its width
-    /// and the ring centres are all unchanged.
+    /// scale — so its width is unchanged; the figures stand further off
+    /// while it is on (`DockLayout.ringToTextSpacing`), which is 5pt here.
     private static let clockGap: CGFloat = 3
     private static let clockLineWidth: CGFloat = 2
     /// The circle the clock arc is stroked along.
@@ -191,14 +170,17 @@ struct UsageRingView: View {
         diameter + lineWidth + (Self.clockGap + Self.clockLineWidth / 2) * 2 * PanelMetrics.scale
     }
 
-    /// The next-fullest limit, as a thinner ring inside the first.
+    /// The next-fullest limit, as a ring of the same weight just inside the
+    /// first.
     ///
     /// Same colour language, deliberately: two arcs measuring the same kind of
     /// thing must be read the same way, and a second hue would be a second
-    /// vocabulary for one idea. What tells them apart is size and weight — the
-    /// limit that matters most is the outer, thicker one, and stays where a
-    /// single ring has always been so nothing moves for somebody who leaves
-    /// this off.
+    /// vocabulary for one idea. What tells them apart is position — the limit
+    /// that matters most is the outer one, and stays where a single ring has
+    /// always been so nothing moves for somebody who leaves this off. Same
+    /// weight and a 1pt gap, so the two tracks read as one band: a thinner
+    /// inner ring with its own gap drew three or four grooves of different
+    /// widths on every ring, which the user found untidy (2026-11-17).
     @ViewBuilder
     private func secondRing(_ fraction: Double) -> some View {
         let used = min(max(fraction, 0), 1)
@@ -272,44 +254,20 @@ struct UsageRingView: View {
 
             if isRefreshing && animatesActivity { refreshMark }
 
-            if showsBotMark {
-                // The mark has its own unavailable expression; keep it legible
-                // instead of dimming the face into the dark disc.
-                let body = botTint ?? BotMarkTint.body(for: provider)
-                BotMarkView(
-                    mood: BotMarkMood.resolve(isBusy: isBusy, isRefreshing: isRefreshing,
-                                              isSpent: isSpent || (usedFraction ?? 0) >= 1,
-                                              hasReading: hasReading),
-                    persona: botPersona ?? .calm,
-                    bodyShape: botBody,
-                    gaze: botGaze,
-                    event: botEvent,
-                    pointer: botPointer,
-                    isPointedAt: highlight,
-                    isQuiet: botQuiet,
-                    tint: body,
-                    eyeTint: BotMarkTint.eyes(on: body),
-                    size: centreDiameter * Self.botScale
-                )
-            } else {
-                LobeIconView(
-                    provider: provider,
-                    size: centreDiameter * Self.iconScale
-                )
-                // Dimmed while there is no reading, so the rail shows at a
-                // glance which providers it actually has data for.
-                .foregroundStyle(.primary.opacity(hasReading ? 1 : 0.35))
-            }
+            // Dimmed while there is no reading, so the rail shows at a
+            // glance which providers it actually has data for. An opacity
+            // rather than a dimmer foreground, because the robot may have a
+            // colour of its own.
+            centreMark
+                .opacity(hasReading ? 1 : 0.35)
 
             if let secondFraction {
                 secondRing(secondFraction)
             }
 
-            // **Not while the mark is animated.** The travelling mark and the
-            // bot's working state are one fact drawn twice, and the white arc
-            // is the half that says nothing about which provider it belongs
-            // to. The mark keeps it; the arc goes.
-            if isBusy && !showsBotMark && animatesActivity {
+            // **Not with the robot.** It shows the CLI working itself, and
+            // the same fact is not drawn twice on one ring.
+            if isBusy && animatesActivity && robot == nil {
                 Circle()
                     .trim(from: 0, to: Self.busySweep)
                     .stroke(
@@ -344,6 +302,38 @@ struct UsageRingView: View {
         .overlay { windowClock }
         .animation(.easeOut(duration: 0.2), value: isRefreshing)
         .accessibilityHidden(true)
+    }
+
+    /// What sits in the disc: the provider's mark, or the robot, sized by
+    /// `robotScale`. Nothing around it moves either way.
+    @ViewBuilder
+    private var centreMark: some View {
+        if let robot {
+            RobotMarkView(
+                mood: RobotMood.resolve(hasReading: hasReading, isSpent: isSpent, isWorking: isBusy, isRefreshing: isRefreshing,
+                                        activity: animatesActivity),
+                gesture: robot.gesture,
+                size: centreDiameter * robotScale,
+                // Everything inside the ring, or inside the second ring when
+                // it is drawn: the figure's hops and ribbons pass behind it.
+                room: secondFraction == nil
+                    ? diameter - lineWidth * 2
+                    : DockLayout.secondRingDiameter - DockLayout.secondRingLineWidth * 2,
+                isLive: isLive,
+                ink: robot.ink,
+                inkIsChosen: robot.inkIsChosen,
+                figure: robot.figure,
+                placeholder: AnyView(LobeIconView(provider: provider, account: account,
+                                                  size: centreDiameter * Self.iconScale)),
+                phase: robot.phase
+            )
+        } else {
+            LobeIconView(
+                provider: provider,
+                account: account,
+                size: centreDiameter * Self.iconScale
+            )
+        }
     }
 
     /// The selected side of the window clock: a hairline outside the usage
@@ -471,10 +461,26 @@ struct UsageRingView: View {
 struct LobeIconView: View {
     /// The SVG in `Resources` to draw, without its extension.
     let resource: String
+    /// Whose mark this is. An extension account with an icon of its own is
+    /// drawn with that instead of `resource`; see `ExtensionIcons`.
+    let account: AccountKey?
     let size: CGFloat
+    @Environment(\.extensionIcons) private var extensionIcons
 
     init(provider: Provider, size: CGFloat) {
+        self.init(provider: provider, account: nil, size: size)
+    }
+
+    /// An account's mark: the provider's, or an extension's own icon. Pass
+    /// the account wherever one is being drawn, so no call site has to look
+    /// the icon up itself.
+    init(account: AccountKey, size: CGFloat) {
+        self.init(provider: account.provider, account: account, size: size)
+    }
+
+    init(provider: Provider, account: AccountKey?, size: CGFloat) {
         self.resource = provider.iconResource
+        self.account = account
         self.size = size
     }
 
@@ -482,15 +488,17 @@ struct LobeIconView: View {
     /// `LobeIconStore`.
     init(resource: String, size: CGFloat) {
         self.resource = resource
+        self.account = nil
         self.size = size
     }
 
     var body: some View {
         Group {
-            if let image = LobeIconStore.image(named: resource) {
+            if let image = account.flatMap({ extensionIcons?.image(for: $0) })
+                ?? LobeIconStore.image(named: resource) {
                 Image(nsImage: image)
                     .resizable()
-                    .renderingMode(.template)
+                    .renderingMode(image.isTemplate ? .template : .original)
                     .scaledToFit()
             } else {
                 Image(systemName: "questionmark")
@@ -505,7 +513,8 @@ struct LobeIconView: View {
 }
 
 /// Loads the bundled Lobe Icons (https://github.com/lobehub/lobe-icons) once
-/// and keeps them around, keyed by provider.
+/// and keeps them around, keyed by resource name. Extension icons are kept
+/// apart, per account, in `ExtensionIcons`.
 ///
 /// The icons ship as SVG, which `NSImage` renders as vectors, so one file
 /// serves every size the app draws at (36pt in the dock rail, 16pt in the
@@ -554,6 +563,66 @@ enum LobeIconStore {
 
     static func image(for provider: Provider) -> NSImage? {
         image(named: provider.iconResource)
+    }
+}
+
+/// Each extension account's own icon, decoded once when the extensions folder
+/// is scanned, not while drawing.
+///
+/// Keyed by account, so a view only needs to know whose mark it draws:
+/// `LobeIconView(account:)` finds the icon by itself, through
+/// `\.extensionIcons`, which the panel, the settings window and the menu set
+/// once at their root. Observable, so a rescan that changes an icon redraws
+/// every place it appears.
+///
+/// One per `AppSettings`, which updates it whenever its extensions change.
+@Observable
+final class ExtensionIcons {
+    private struct Entry {
+        let data: Data
+        let image: NSImage
+    }
+
+    private var entries: [AccountKey: Entry] = [:]
+
+    func image(for account: AccountKey) -> NSImage? {
+        guard account.provider == .pulseExtension else { return nil }
+        return entries[account]?.image
+    }
+
+    /// Called with each scan. An icon whose bytes did not change keeps its
+    /// image; one that did is decoded again, even at the same path.
+    func update(from extensions: [PulseExtension]) {
+        var next: [AccountKey: Entry] = [:]
+        for found in extensions {
+            guard let data = found.iconData else { continue }
+            if let kept = entries[found.account], kept.data == data {
+                next[found.account] = kept
+                continue
+            }
+            guard let image = NSImage(data: data), image.isValid else { continue }
+            // PNGs are app artwork: treating their opaque interiors as a
+            // template would erase details such as a black glyph on white.
+            image.isTemplate = false
+            next[found.account] = Entry(data: data, image: image)
+        }
+        // Assigned only on a change, so an unchanged rescan redraws nothing.
+        let changed = next.count != entries.count
+            || next.contains { entries[$0.key]?.image !== $0.value.image }
+        if changed { entries = next }
+    }
+}
+
+private struct ExtensionIconsKey: EnvironmentKey {
+    static var defaultValue: ExtensionIcons? { nil }
+}
+
+extension EnvironmentValues {
+    /// The extension icons `LobeIconView(account:)` draws from. Nil, as in a
+    /// preview, draws every account with its provider's mark.
+    var extensionIcons: ExtensionIcons? {
+        get { self[ExtensionIconsKey.self] }
+        set { self[ExtensionIconsKey.self] = newValue }
     }
 }
 

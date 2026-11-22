@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Replicate: the prepaid credit left on the account, read with the signed-in
@@ -175,10 +176,6 @@ enum ReplicateUsageService {
 
     /// Replicate bills in dollars; the reply carries the figure only.
     static func money(_ amount: Double) -> String {
-        amount.formatted(
-            .currency(code: "USD")
-                .precision(.fractionLength(2))
-                .locale(LocalizationSource.locale)
-        )
+        amount.formatted(Money.reportedStyle("USD"))
     }
 }

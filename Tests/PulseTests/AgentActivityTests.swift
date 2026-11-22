@@ -6,8 +6,44 @@ import Testing
 struct AgentActivityTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test("Cached lifecycle facts still expire and changed, new or deleted files are noticed")
+    func cachedActivity() throws {
+        let home = try EditorTestSupport.temporary("activity-cache")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let file = home.appending(path: ".codex/sessions/one.jsonl")
+        let stamp = ISO8601DateFormatter().string(from: Self.now)
+        try EditorTestSupport.jsonLines([
+            ["timestamp": stamp, "payload": ["type": "task_started"]],
+        ], to: file)
+        try FileManager.default.setAttributes([.modificationDate: Self.now], ofItemAtPath: file.path)
+        var cache = AgentActivity.Cache()
+        func state(_ elapsed: TimeInterval) -> AgentActivity.State? {
+            AgentActivity.states(for: [.codex], now: Self.now.addingTimeInterval(elapsed), home: home, cache: &cache)[.codex]
+        }
+        #expect(state(0)?.isWorking == true)
+        #expect(state(89)?.isWorking == true)
+        #expect(state(91)?.isWorking == false)
+        // Size alone invalidates even when a filesystem's mtime has not moved.
+        try EditorTestSupport.jsonLines([
+            ["timestamp": stamp, "payload": ["type": "task_started"]],
+            ["timestamp": stamp, "payload": ["type": "task_complete"]],
+        ], to: file)
+        try FileManager.default.setAttributes([.modificationDate: Self.now], ofItemAtPath: file.path)
+        #expect(state(0)?.isWorking == false)
+        let second = home.appending(path: ".codex/sessions/nested/two.jsonl")
+        try EditorTestSupport.jsonLines([
+            ["timestamp": stamp, "payload": ["type": "function_call"]],
+        ], to: second)
+        try FileManager.default.setAttributes([.modificationDate: Self.now.addingTimeInterval(-1)], ofItemAtPath: second.path)
+        #expect(state(100)?.isWorking == true, "An older live file still counts beside the newest finished file")
+        try FileManager.default.removeItem(at: second)
+        #expect(state(100)?.isWorking == false)
+        try FileManager.default.removeItem(at: file)
+        #expect(state(100)?.lastWrite == nil)
+    }
+
     @Test("The scanner reads only the selected activity providers", arguments: [
-        Set<Provider>(), [.deepSeek], [.claudeCode], [.codex], [.kiro], [.claudeCode, .codex]
+        Set<Provider>(), [.deepSeek], [.claudeCode], [.codex], [.kiro], [.commandCode], [.claudeCode, .codex]
     ])
     func selectedTranscripts(providers: Set<Provider>) throws {
         let home = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -21,7 +57,9 @@ struct AgentActivityTests {
             ".codex/sessions/test/session.jsonl":
                 "{\"type\":\"event_msg\",\"timestamp\":\"\(stamp)\",\"payload\":{\"type\":\"task_started\"}}\n",
             ".kiro/sessions/cli/session.jsonl":
-                "{\"version\":\"v1\",\"kind\":\"Prompt\",\"data\":{\"content\":\"test\"}}\n"
+                "{\"version\":\"v1\",\"kind\":\"Prompt\",\"data\":{\"content\":\"test\"}}\n",
+            ".commandcode/projects/test/session.jsonl":
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"test\"}]}}\n"
         ]
         for (path, text) in logs {
             let file = home.appending(path: path)
@@ -66,6 +104,57 @@ struct AgentActivityTests {
             ]],
         ], to: file)
         #expect(AgentActivity.verdict(for: file, provider: .kiro) == .finished)
+    }
+
+    /// Command Code appends each message as it completes, with the turn's
+    /// state in who spoke last and whether the model asked for a tool.
+    @Test("Command Code's messages bracket model and tool work")
+    func commandCodeVerdicts() throws {
+        let home = try EditorTestSupport.temporary("commandcode-activity")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let file = home.appending(path: "session.jsonl")
+        let createdAt = Self.now.timeIntervalSince1970 * 1000
+
+        try EditorTestSupport.jsonLines([
+            ["type": "session", "id": "s"],
+            ["type": "message", "message": ["role": "user", "meta": ["createdAt": createdAt, "source": "user"],
+                                            "content": [["type": "text", "text": "review"]]]],
+        ], to: file)
+        #expect(AgentActivity.verdict(for: file, provider: .commandCode) == .working(.model, at: Self.now))
+
+        try EditorTestSupport.jsonLines([
+            ["type": "message", "message": ["role": "assistant", "meta": ["createdAt": createdAt, "source": "model"],
+                                            "content": [["type": "thinking"], ["type": "tool_use", "name": "read"]]]],
+        ], to: file)
+        #expect(AgentActivity.verdict(for: file, provider: .commandCode) == .working(.tool, at: Self.now))
+
+        // A tool's results carry no `createdAt`: timed from the file instead.
+        try EditorTestSupport.jsonLines([
+            ["type": "message", "message": ["role": "user", "meta": ["source": "tool"],
+                                            "content": [["type": "tool_result"]]]],
+        ], to: file)
+        #expect(AgentActivity.verdict(for: file, provider: .commandCode) == .working(.model, at: nil))
+
+        try EditorTestSupport.jsonLines([
+            ["type": "message", "message": ["role": "assistant", "meta": ["createdAt": createdAt, "source": "model"],
+                                            "content": [["type": "thinking"], ["type": "text", "text": "done"]]]],
+        ], to: file)
+        #expect(AgentActivity.verdict(for: file, provider: .commandCode) == .finished)
+    }
+
+    @Test("Command Code's checkpoint files are not sessions")
+    func commandCodeCheckpointsIgnored() throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let folder = home.appending(path: ".commandcode/projects/test")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let checkpoints = folder.appending(path: "s.checkpoints.jsonl")
+        try Data("{\"kind\":\"checkpoint\"}\n".utf8).write(to: checkpoints)
+        try FileManager.default.setAttributes([.modificationDate: Self.now], ofItemAtPath: checkpoints.path)
+
+        let state = try #require(AgentActivity.states(for: [.commandCode], now: Self.now, home: home)[.commandCode])
+        #expect(!state.isWorking)
+        #expect(state.lastWrite == nil)
     }
 
     @Test("Kiro Desktop and v2 ACP lifecycle records bracket a turn")

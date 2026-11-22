@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Factory, the company behind the Droid agent: either a five-hour, a weekly
@@ -258,11 +259,7 @@ enum FactoryUsageService {
     }
 
     static func money(_ amount: ProviderUsage.CreditAmount) -> String {
-        amount.amount.formatted(
-            .currency(code: amount.currency)
-                .precision(.fractionLength(2))
-                .locale(LocalizationSource.locale)
-        )
+        amount.amount.formatted(Money.reportedStyle(amount.currency))
     }
 
     // MARK: - The older billing

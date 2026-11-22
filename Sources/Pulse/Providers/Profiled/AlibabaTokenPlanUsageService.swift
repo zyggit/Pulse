@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Alibaba Cloud's Token Plan (Model Studio / Bailian): a five-hour, a weekly
@@ -22,6 +23,7 @@ extension ProviderProfile {
     static let alibabaTokenPlan = ProviderProfile(
         displayName: "Alibaba Token Plan",
         iconResource: "alibabacloud",
+        brandColour: 0xFF6A00,
         credential: .localLogin,
         accessDescription: {
             .localized("Runs the Bailian CLI (bl) with its saved login. Pulse does not read or store its credentials.")
@@ -29,7 +31,6 @@ extension ProviderProfile {
         soleRoute: {
             (.localized("Bailian CLI"), .localized("Uses the login the Bailian CLI already saved."))
         },
-        brandColor: 0xFF6A00,
         setupSlug: "alibaba-token-plan",
         fetch: { await AlibabaTokenPlanUsageService.fetch($0) }
     )

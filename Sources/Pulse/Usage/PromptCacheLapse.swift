@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// When the prompt cache behind Claude Code's latest session lapses.
@@ -85,8 +86,8 @@ struct PromptCacheReading: Equatable, Sendable {
 
 extension PromptCacheSession {
     /// What to call this conversation on a line of its own: a rename or the
-    /// opening prompt, else the project it ran in.
-    var displayName: String? { title ?? project }
+    /// opening prompt, else the project it ran in, else "Untitled conversation".
+    var displayName: String { SessionLabel.text(title: title, isReview: false, project: project) }
 }
 
 enum ClaudePromptCache {
@@ -285,7 +286,7 @@ enum ClaudePromptCache {
         return nil
     }
 
-    private static func date(_ text: String) -> Date? {
+    static func date(_ text: String) -> Date? {
         let precise = ISO8601DateFormatter()
         precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return precise.date(from: text) ?? ISO8601DateFormatter().date(from: text)
@@ -324,5 +325,26 @@ enum ClaudePromptCache {
             case hour = "ephemeral_1h_input_tokens"
             case fiveMinutes = "ephemeral_5m_input_tokens"
         }
+    }
+}
+
+extension PromptCacheReading {
+    /// The providers whose logs let a cache be timed: Claude Code alone, by
+    /// the tier each reply records.
+    ///
+    /// **Not Codex**, since 2026-11-17. Its log names each turn's model and
+    /// nothing about how long a cache is kept, so Pulse timed OpenAI's
+    /// documented API floor (thirty minutes on GPT-5.6 and later). OpenAI has
+    /// since said that a signed-in Codex keeps its cache for good, so that
+    /// floor counted down to an end most Codex users never reach, and the log
+    /// does not say which sign-in a session used. See
+    /// `Docs/ui/panel-geometry.md`.
+    static func supports(_ provider: Provider) -> Bool {
+        provider == .claudeCode
+    }
+
+    /// A read for a supported provider; `.none` for any other.
+    static func read(for provider: Provider) -> PromptCacheReading {
+        provider == .claudeCode ? ClaudePromptCache.read() : .none
     }
 }

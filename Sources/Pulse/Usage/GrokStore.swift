@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Grok Build's transcripts.
@@ -23,6 +24,7 @@ import Foundation
 /// it are used only when it is absent.
 enum GrokStore {
     static func ledger(at root: URL, prices: [String: ModelPrice]) -> UsageLedger {
+        var lookup = ModelPriceLookup(prices)
         var buckets: [String: [String: TokenTally]] = [:]
         var sessions: [UsageLedger.Session] = []
 
@@ -74,15 +76,22 @@ enum GrokStore {
                         ?? ["grok": usage]
 
                     for (model, counts) in perModel {
+                        // `inputTokens` already holds the cached read and
+                        // `outputTokens` the reasoning: `totalTokens` is
+                        // their sum alone, a read never exceeds the input,
+                        // and Grok Build's own cost meter prices them that
+                        // way (#91). Adding them again doubled the totals
+                        // and held the hit rate under 50%.
+                        let cacheRead = int(counts["cachedReadTokens"])
                         let tally = TokenTally(
-                            input: int(counts["inputTokens"]),
+                            input: max(int(counts["inputTokens"]) - cacheRead, 0),
                             cacheWrite: int(counts["cacheCreationTokens"]),
-                            cacheRead: int(counts["cachedReadTokens"]),
-                            output: int(counts["outputTokens"]) + int(counts["reasoningTokens"])
+                            cacheRead: cacheRead,
+                            output: int(counts["outputTokens"])
                         )
                         guard tally.total > 0 else { continue }
 
-                        let price = ModelPrices.price(for: model, in: prices)
+                        let price = lookup.price(for: model)
                         let money = price.map { tally.cost(at: $0) } ?? 0
                         let unpriced = price == nil ? tally.total : 0
                         buckets[key, default: [:]][model] = (buckets[key]?[model] ?? TokenTally()) + tally

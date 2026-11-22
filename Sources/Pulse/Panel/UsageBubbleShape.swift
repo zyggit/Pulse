@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import SwiftUI
 
 /// The details card's outline: rounded body and pointer as one path.
@@ -55,11 +56,17 @@ struct UsageBubbleShape: Shape {
         return facingSideways(in: rect)
     }
 
+    /// Whether the tail leaves from the leading side of the sideways drawing.
+    /// A card above the rail is that drawing turned the same quarter turn as
+    /// one below it — so its tail, which has to end up underneath, is the
+    /// leading one, as it is for a card right of a left-hand rail.
+    private var tailLeads: Bool { edge == .left || edge == .bottom }
+
     private func facingSideways(in rect: CGRect) -> Path {
         // The pointer lives in a strip along the rail-facing side; the body
         // fills what's left.
         let body = CGRect(
-            x: edge.isLeft ? pointerWidth : 0,
+            x: tailLeads ? pointerWidth : 0,
             y: 0,
             width: max(rect.width - pointerWidth, 0),
             height: rect.height
@@ -79,16 +86,19 @@ struct UsageBubbleShape: Shape {
     /// The tail, as a subpath overlapping the body's edge so the two read as a
     /// single silhouette once filled.
     private func pointerPath(in rect: CGRect, body: CGRect) -> Path {
-        let half = pointerHeight / 2
-        // Keep the tail clear of the rounded corners, and inside the card even
-        // when the caller asks for something out of range.
-        let centre = min(
-            max(pointerCenter, cornerRadius + half),
-            max(rect.height - cornerRadius - half, cornerRadius + half)
-        )
+        let radius = min(cornerRadius, rect.height / 2)
+        let half = min(pointerHeight / 2, max(rect.height / 2 - radius, 0))
+        // Keep the base off the corners, and let the tip lean towards the ring
+        // by up to half the base. Clamping the tip with the base made end
+        // rings point beside the arrow; an unbounded lean drew a tail skewed
+        // into a thin sliver, which glass refracts as all rim.
+        let ring = min(max(pointerCenter, 0), rect.height)
+        let inset = radius + half
+        let centre = min(max(ring, inset), max(rect.height - inset, inset))
+        let tip = min(max(ring, centre - half), centre + half)
 
-        let baseX = edge.isLeft ? body.minX : body.maxX
-        let tipX = edge.isLeft ? rect.minX : rect.maxX
+        let baseX = tailLeads ? body.minX : body.maxX
+        let tipX = tailLeads ? rect.minX : rect.maxX
         let reach = tipX - baseX
 
         // Traverse the tail in the direction that winds the same way as the
@@ -97,7 +107,7 @@ struct UsageBubbleShape: Shape {
         // *cancel* where they overlap — which is exactly what happened on the
         // left edge: mirroring the geometry reversed the tail's direction, and
         // the overlap with the body punched a gap between them.
-        let sweep = edge.isLeft ? -half : half
+        let sweep = tailLeads ? -half : half
 
         // Where the two control points of each flank sit, as fractions of
         // `reach` along the tail and of `sweep` across it.
@@ -118,13 +128,15 @@ struct UsageBubbleShape: Shape {
         var path = Path()
         path.move(to: CGPoint(x: baseX, y: centre - sweep))
         path.addCurve(
-            to: CGPoint(x: tipX, y: centre),
+            to: CGPoint(x: tipX, y: tip),
             control1: CGPoint(x: baseX + reach * nearAlong, y: centre - sweep * nearAcross),
-            control2: CGPoint(x: baseX + reach * farAlong, y: centre - sweep * farAcross)
+            control2: CGPoint(x: baseX + reach * farAlong,
+                              y: min(max(tip - sweep * farAcross, 0), rect.height))
         )
         path.addCurve(
             to: CGPoint(x: baseX, y: centre + sweep),
-            control1: CGPoint(x: baseX + reach * farAlong, y: centre + sweep * farAcross),
+            control1: CGPoint(x: baseX + reach * farAlong,
+                              y: min(max(tip + sweep * farAcross, 0), rect.height)),
             control2: CGPoint(x: baseX + reach * nearAlong, y: centre + sweep * nearAcross)
         )
         // Bite back into the body so the join is covered by the fill rather

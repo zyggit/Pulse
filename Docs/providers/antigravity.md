@@ -1,12 +1,14 @@
 # Antigravity
 
-Service: [`AntigravityUsageService.swift`](../../Sources/Pulse/Providers/AntigravityUsageService.swift).
+Service: [`AntigravityUsageService.swift`](../../Sources/Pulse/Providers/AntigravityUsageService.swift), with the CLI route in [`AntigravityCLIUsage.swift`](../../Sources/Pulse/Providers/AntigravityCLIUsage.swift).
 
-The odd one out. Extra accounts are not supported. `keepsLocalTranscripts` is false: it is an editor, not a CLI, and leaves no session files Pulse can read. History, the money estimate, and the activity mark are left out rather than shown as zeroes.
+Two routes, chosen in Settings → *Read usage from*: **Automatic** (the default) tries the editor's **language server** while Antigravity is open, then the **`agy` CLI** when the server produced no figures; **CLI** asks only `agy`; **Desktop app** asks only the language server. The route that answered is recorded as `languageServer` or `antigravityCLI`.
 
-## Route
+The odd one out. Extra accounts are not supported. `keepsLocalTranscripts` is false: it leaves no session files the history card can read, so history and the money estimate are left out rather than shown as zeroes. The activity mark is drawn from its conversation databases ([below](#activity-mark)).
 
-Antigravity starts a `language_server` of its own and talks to it over HTTPS on loopback. That process is the only thing that knows the quota, so **these figures exist only while something of Antigravity’s is running** — `.antigravityNotRunning` says that plainly rather than dressing it up as a failure.
+## The language server
+
+Antigravity starts a `language_server` of its own and talks to it over HTTPS on loopback. On this route **the figures exist only while something of Antigravity’s is running** — `.antigravityNotRunning` says that plainly rather than dressing it up as a failure. With Antigravity closed, the `agy` CLI is asked instead when it is installed (below).
 
 Three things are discovered and **none may be assumed**:
 
@@ -41,11 +43,32 @@ CodexBar’s notes say the IDE’s local endpoints expose only session/model quo
 
 That payload is committed as `Tests/PulseTests/Fixtures/antigravity-quota.json` and is what `AntigravityParsingTests` holds the parser against. `GetUserStatus` on the same port named the plan (`Pro`). Their note may be about an older IDE build; either way, do not drop the IDE origin on the strength of it without re-measuring.
 
-### The `agy` CLI, not implemented
+## The `agy` CLI
 
-There is a third source: Google ships a standalone CLI (`brew install --cask antigravity-cli`, binary `antigravity` symlinked to `agy`, state under `~/.gemini/antigravity-cli`) which runs its own embedded HTTPS server, and CodexBar reports it as the richest of the sources and the one that works with no editor open at all.
+Google's standalone CLI, `agy` (installed to `~/.local/bin/agy`; state under `~/.gemini/antigravity-cli`), is the second route. **Gemini.app installs the same CLI to `~/.gemini/bin/agy`** (with `agy.version.json` from its own updater) and runs no language server of its own, so for someone using Antigravity inside Gemini.app this CLI is the only route there is; `locateCLI()` tries it after the usual install locations (#106, measured with Gemini.app 1.138 on 2026-11-05). It works with no editor open, using the login the CLI saved. Pulse starts the program and reads its standard output; it never reads the CLI's credentials.
 
-It is **not implemented, because it could not be observed**: the cask is not installed on the machine this was written on, so whether `agy` spawns a matching `language_server` process with a `--csrf_token` on its command line — which is the whole of the discovery above — is unknown. Adding it is one `Origin` case once somebody can watch it run. Writing that case from a guess is exactly what “none may be assumed” is about.
+### What was measured (2026-10-14, `agy` 1.3.5)
+
+**The language-server discovery does not apply to it.** The interactive `agy` runs its server inside its own process: `ps` shows a bare `agy` with no `--csrf_token` on the command line and no `language_server` child, while `lsof` shows it listening on two loopback ports. There is no token to find, so it is not one more `Origin`.
+
+**It answers `/usage` itself in print mode.** `agy -p "/usage" --output-format json` prints a JSON envelope whose `command.data.groups[].buckets[]` holds the same data as `RetrieveUserQuotaSummary`: the same bucket ids (`gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly`), the same `5h` / `weekly` windows, `remaining_fraction` and `reset_time`, in snake case. Group names are under `name`, not `displayName`. `/quota` is an alias. The CLI's changelog says these print-mode answers start no agent turn, spend no quota and leave no conversation, and that held: no conversation, history entry or log appeared. The CLI's own `/help` lists no other command that names the plan, so `plan` stays nil on this route.
+
+The envelope's tab-separated `response` text rounds the percentages (a fraction of 0.998 prints as `100%`), so only `remaining_fraction` is read. A run took about 8.5 seconds, most of it the CLI's own eligibility check over the network; the deadline is 30 seconds. A failed run exits 1 with `"status": "ERROR"` and an `error` message — measured with an unreachable proxy — which does not say reliably whether the cause is the network or the login.
+
+### How it is asked
+
+1. **Only when the language server produced no figures.** The server is local and fast, and it belongs to the account the open editor is using. Asking the CLI first would start a process and a network request on every refresh, and the CLI may be signed in to a different Google account.
+2. **Only `agy` 1.1.11 or newer.** `agy --version` (about 40 ms) is read first. Before 1.1.11, a slash command in print mode fell through as literal prompt text, so `-p "/usage"` would be **sent to the model**, spend quota and leave a conversation behind — on every refresh. Pulse sends nothing on the user's behalf, so a version that cannot be read counts as too old and the CLI is not asked.
+3. **With `--log-file /dev/null`.** Without it, every run writes a new log file under `~/.gemini/antigravity-cli/log/` and repoints `cli.log` at it, away from the log of the session the user is running.
+4. **From the temporary directory**, because the CLI looks for project files around the folder it runs in.
+
+Only `agy` is looked for (`CommandLocator`). `antigravity` is also the name of the editor's own shell command, a different program.
+
+### When the CLI does not answer
+
+**Automatically, the language server's reason stands.** A CLI that exits with an error, times out or prints something unreadable leaves `.antigravityNotRunning` or `.antigravityNotAnswering` in place, and the CLI's attempt is recorded for the diagnostics. Reporting the CLI's failure instead would raise a notification for someone who installed `agy`, never signed in to it and closed the editor. A CLI that answers with no limits reports `.noLimitsReported`, which is an answer, not a fault. **Pinned to *CLI*, every failure is its own** (`cliOnly`): `.antigravityCLIMissing` when `agy` is not installed, `.antigravityCLIOutdated` below 1.1.11 or with an unreadable version, and the run's own reason otherwise. Both new reasons are setup, not outages, so they raise no failure notification.
+
+**`/credits` is not read.** It reports a separate balance of AI credits (`remaining_credits`) that can be bought, not the plan's quota, and a balance of 0 is what an account that never bought any reports.
 
 ## Mapping
 
@@ -63,17 +86,17 @@ Second call: `GetUserStatus`. Only `planName` is decoded. The same reply holds n
 
 Of the 306 methods the language server exposes, not one has “usage” or “credit” in its name; `GetUserAnalyticsSummary` answers `{}`; `~/.antigravity` holds only binaries and extensions; the editor’s `state.vscdb` keeps conversation titles and two sentinel values under `modelCredits`, no token counts.
 
-So history, money estimate, and activity cannot be built — they need per-model token counts that do not exist to be read.
+So history, money estimate, and activity cannot be built from the language server — they need per-model token counts it does not give. They come instead from the conversation stores under `~/.gemini`, read by Token spend ([../token-spend-sources.md](../token-spend-sources.md)).
 
 `~/.gemini` was **not** on that list and should have been: it holds `antigravity/`, `antigravity-ide/` and a `jetski-standalone-oauth-token` of `{auth_method, token}`. That is the Google OAuth route CodexBar calls experimental, and its own notes say the OAuth payload can only prove model availability — an all-100% placeholder rather than real quota. Worth knowing before anyone spends a day on it. It carries no token counts either, so it changes nothing above.
 
 Antigravity also reports a monthly credit *allowance*, never a balance, which is why `creditBalance` stays nil: an allowance shown there would read as what is left.
 
-## Two allowances, optionally two rings
+## Separate allowances, optionally one ring each
 
-The plan carries a Gemini allowance and a separate one for Claude and GPT, reported as two `scope`s of one login — the reason `Provider.splitsByModelGroup` exists and names only this provider. The Antigravity pane offers "A ring for each model group", off by default; on, the rail draws one ring per group, both with this provider's icon and both refreshing the same login. The rail-side rules are in [../ui/rings-and-surface.md](../ui/rings-and-surface.md).
+The plan carries a Gemini allowance and a separate one for Claude and GPT, reported as `scope`s of one login — the reason `Provider.splitsByModelGroup` exists and names only this provider. Since 2026-11 some accounts report a third group, a weekly-only allowance for Gemini 4 Argon outside the Gemini one: on a Pro account the CLI answered a group named `Gemini 4 Argon` (no trailing "models", so its scope is the name as given) with one bucket, `gemini-argon-wtu-weekly`, `window` `weekly` (#106, the reporter's `agy` output on 2026-11-05; the account measured here still answered two groups). Its description says Ultra plans fold Argon into the larger Gemini bucket, so the group's presence depends on the plan. Pinned by the `antigravity-cli-usage-argon.json` fixture. The Antigravity pane offers "A ring for each model group", off by default; on, the rail draws one ring per group, each with this provider's icon and all refreshing the same login, and each group has its own switch so a group nobody uses need not cost a ring. A weekly-only group is one window, so its ring has no second ring. The rail-side rules are in [../ui/rings-and-surface.md](../ui/rings-and-surface.md#one-ring-per-model-group).
 
-`modelGroupCount` is a fixed 2 rather than counted from a reading, so the rail's own budget does not move when a reply arrives one group short.
+`modelGroupCount` is a fixed 3 rather than counted from a reading, so the rail's own budget does not move when a reply arrives one group short; with groups left off, the budget is the groups chosen.
 
 ## First run
 
@@ -81,4 +104,16 @@ The plan carries a Gemini allowance and a separate one for Claude and GPT, repor
 
 ## Settings copy
 
-`Provider.soleRoute` names “Antigravity’s language server” / “Only while Antigravity is open.” The second half is now slightly narrow — the IDE counts too — but it names the right condition and the right remedy, so it is left alone until the `agy` source makes it properly wrong. That wording must not leak to other single-route providers. See [README.md](README.md).
+A picker, not a stated route: every provider with more than one route offers the choice (`hasSourceChoice`), so `Provider.soleRoute` is nil. Options are *Automatic* / *CLI* / *Desktop app* (`UsageSource.options(for:)`; *CLI* is `.tooling` titled by `title(for:)`). The subtitles: automatic “Reads Antigravity while it is open, and the agy CLI when it is not.”, CLI “Asks the agy CLI, using the login it already saved.”, desktop app “Asks the language server Antigravity runs while it is open.” Claude's desktop-route availability filter does not apply to it. `UsageRoute.soleRoute(for:)` is nil because the service records which route answered. The wording must not leak to other single-route providers. See [README.md](README.md).
+
+## Activity mark
+
+`supportsLocalActivity` is true. `agy` keeps one SQLite database per conversation in `~/.gemini/antigravity-cli/conversations/` (measured with `agy` 1.5.0 on 2026-11-17); Antigravity.app keeps its own in `~/.gemini/antigravity/conversations/`, and `antigravity-ide/conversations` is the editor's other spelling. All three turn the one ring (`AgentActivity.roots`). Token spend keeps the first apart from the other two ([../token-spend-sources.md](../token-spend-sources.md)): the `agy` process Gemini.app runs in the background opens the app's folder, but a conversation started in a terminal is written to `antigravity-cli`. A database counts as written when it or its `-wal` journal was, because the journal takes the writes until a checkpoint.
+
+Only the newest row of `steps` is read (`step_type`, `status`; `AgentActivity.antigravityVerdict`). The numbers are `CortexStepStatus` and `CortexStepType` from the descriptor in `agy` 1.5; the progression was observed on 2026-11-17 with an `agy -p` run and an Antigravity.app conversation:
+
+- **Pending, generating or queued** (1, 8, 11): the model is working. **Running** (2): a tool is, with the tool's longer grace.
+- **Done** (3) on a model response (`PLANNER_RESPONSE`, 15) ends the turn; every turn in the store ends on one. Done on any other step, a prompt or a tool, leaves the move with the model, which opened its next response about ten seconds after a tool finished.
+- **Waiting** (9) is waiting for a person and is not drawn. Error, canceled, interrupted and the rest end it too: a tool denied in print mode ended the run there.
+
+The step's own time is inside a protobuf blob, so the grace is timed from the database's last write. A database without a `steps` table, or one that cannot be read at that moment (a WAL database with no journal beside it after `agy` exits, or one busy mid-recovery), is not work and is not cached: it is asked again on the next sample. `AntigravityActivityTests`.

@@ -15,11 +15,11 @@ Xiaomi's MiMo open platform, read through the console's own account routes.
 
 **"Xiaomi Coding Plan", not "Xiaomi MiMo".** The platform sells two different things on one account: inference by the yuan to anyone with a key, and a monthly token allowance bought on top of that. Only the second has a denominator, so only the second can be a ring — and naming the row for the platform would have it stand for both. CodexBar calls its equivalent "Xiaomi MiMo" because it leads with the balance; this one leads with the plan.
 
-It is the longest name on the rail at eighteen characters, four past "GitHub Copilot", which is what the Settings sidebar was previously sized to. See [`../ui/settings.md`](../ui/settings.md).
+It is eighteen characters, four past "GitHub Copilot", which is what the Settings sidebar was previously sized to; "Alibaba Coding Plan" is now the longest. See [`../ui/settings.md`](../ui/settings.md).
 
 ## One row, not two
 
-**Asked and answered: this is not another MiniMax.** Two providers on the rail are split into a mainland row and an international one — MiniMax / MiniMax CN, and z.ai / Zhipu — because those really are two storefronts: separate accounts, separate keys, and a key for one refused by the other. That split cost a real bug before it existed (issue #13, an international subscriber's key sent to the mainland service), so the question is worth asking of every Chinese provider added since.
+**Asked and answered: this is not another MiniMax.** z.ai / Zhipu are split into a mainland row and an international one, and MiniMax into two sites under one provider, because those really are two storefronts: separate accounts, separate keys, and a key for one refused by the other. That split cost a real bug before it existed (issue #13, an international subscriber's key sent to the mainland service), so the question is worth asking of every Chinese provider added since.
 
 Xiaomi is one storefront:
 
@@ -33,7 +33,7 @@ Not verified: whether signing up from outside mainland China lands on this same 
 
 ## Credential
 
-A browser session for `platform.xiaomimimo.com`, read by [`BrowserCookies`](../../Sources/Pulse/Auth/BrowserCookies.swift) or pasted as a `Cookie:` header — the same two ways in as Ollama's, and the second provider to use that path.
+A browser session for `platform.xiaomimimo.com`, read by [`BrowserCookies`](../../Sources/Pulse/Auth/BrowserCookies.swift) or pasted as a `Cookie:` header — the same two ways in as Ollama's; Qoder and StepFun use them too.
 
 `XiaomiMiMoCookie` keeps **only** these names and discards the rest of the store:
 
@@ -60,9 +60,13 @@ Safari's store needs Full Disk Access; the Chromium browsers ask for keychain pe
 | `tokenPlan/detail` | `data.planCode`, `data.currentPeriodEnd`, `data.expired` |
 | `balance` | `data.balance` and `data.currency`, as strings |
 
-**The plan's failure is the call's failure; the balance's is one line on the card.** The ring comes from `tokenPlan/usage`, so a usage route that does not answer is an unavailable provider. The balance is money on the card and nothing else depends on it, so losing it costs that line. `tokenPlan/detail` is in between: it carries the reset and the plan's name, and without it the row still draws with neither.
+**The plan's failure is the call's failure; beside a plan, the balance's is one line on the card.** The ring comes from `tokenPlan/usage`, so a usage route that does not answer is an unavailable provider. The balance is money on the card and nothing else depends on it, so losing it costs that line. `tokenPlan/detail` is in between: it carries the reset and the plan's name, and without it the row still draws with neither.
 
-`monthUsage.items` is a list because the console draws a row per bucket. The plan's own allowance is the first, and an **empty list is an account with no plan** — one that buys tokens by the yuan. That is a complete answer (`.xiaomiNoCodingPlan`), not a fault, and it is reported rather than drawn as 0%, which would read as a full month nobody has. `zaiNoCodingPlan` exists for exactly the same reason.
+`monthUsage.items` is a list because the console draws a row per bucket. The plan's own allowance is the first, and an **empty list is an account with no plan** — one that buys tokens by the yuan. Never drawn as 0%, which would read as a full month nobody has.
+
+**An account with no plan is read as its balance** (#82, `XiaomiMiMoUsageService.reading(from:)`). Such an account has money and no allowance, which is what an API account is, so it gets an API account's ring: a live reading with no windows and `creditRemaining` set, which `UsageStore.ringed` gives the `BalanceRing` basis chosen in Settings (balance only, since the last top-up, or a budget; [deepseek.md](deepseek.md)), with the money on the rail until there is a denominator. The pane offers the basis and the "warn below" line for it, as for any account whose reading is a balance (`AccountEntryFields.reportsBalance`). Only with neither a plan nor a balance is it `.xiaomiNoCodingPlan`, still a complete answer rather than a fault; `zaiNoCodingPlan` exists for the same reason.
+
+**Only a stated "no plan" counts** (`XiaomiMiMoClient.saysNoPlan`): a usage reply with code 0 and no allowance in it, or a plan the detail route calls expired. A usage route that did not answer, answered with a non-zero code, or did not decode is the call's failure — otherwise a usage route timing out beside a balance that answered would turn a Coding Plan subscriber into a pay-as-you-go account for a refresh.
 
 An `expired` plan keeps reporting last month's figures until it renews. Those are not a current allowance, so nothing is drawn.
 
@@ -84,7 +88,7 @@ One window, `kind: .monthly`, `id` `xiaomi.plan`.
 
 `windowSeconds` is thirty days and **`reportsLength` is false**. The platform states when the period ends and never how long it is, and a billing month is not a fixed number of seconds — so the length is a sort key, the window-clock arc is not drawn, and the forecast does not divide by it. Copilot's calendar month is carried the same way; see the `windowSeconds` section of [README.md](README.md).
 
-The balance rides along as `creditBalance`, a formatted string. **Not `creditRemaining`**, which is the number-and-currency pair the "warn below" line is built on: there is no allowance to compare a prepaid balance against here, so `reportsSpendableBalance` stays false and no low-balance alert is offered. DeepSeek and Command Code are the two that do offer one, and both of them have a denominator of some kind.
+Beside a plan, the balance rides along as `creditBalance`, a formatted string, **not `creditRemaining`**: the plan is the ring, and the balance there is what is spent past it, so no "warn below" line is offered. Without a plan the balance is the reading itself and carries `creditRemaining` (above). `reportsSpendableBalance` stays false for the provider either way; the pane asks the reading.
 
 ## Unconfirmed
 

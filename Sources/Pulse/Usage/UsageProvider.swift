@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// The coding agents Pulse tracks.
@@ -17,7 +18,6 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     case zai
     case glmCoding
     case minimax
-    case minimaxCN
     case copilot
     case grok
     case grokBot
@@ -34,6 +34,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     // Providers described by a `ProviderProfile`, each in its own file under
     // `Providers/Profiled/`. Every switch below hands them to that profile.
     case clinePass
+    case dimAgent
     case alibabaCodingPlan
     case alibabaTokenPlan
     case qwenCloud
@@ -85,6 +86,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     case replicate
     case typeSafe
     case vercelAIGateway
+    case openDesign
     /// **Not one provider: every program in the extensions folder.** Each
     /// extension is an account of this one — `AccountKey(.pulseExtension,
     /// slot: <the extension's id>)` — so the rail, the cache, the settings
@@ -116,7 +118,6 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case zai
         case glmCoding
         case minimax
-        case minimaxCN
         case copilot
         case grok
         case grokBot
@@ -191,10 +192,9 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         // knows, so it is the whole name.
         case .zai: "z.ai"
         case .glmCoding: "Zhipu"
-        // Same product, two storefronts and two accounts. There is no separate
-        // brand name for the mainland one, so the region is the distinction.
+        // One provider for both storefronts, minimax.io and minimaxi.com:
+        // which one is a setting (`AppSettings.minimaxSite`), as Qoder's is.
         case .minimax: "MiniMax"
-        case .minimaxCN: "MiniMax CN"
         case .copilot: "GitHub Copilot"
         // The account's pool is spent across every Grok product, not just
         // Grok Build's CLI, so the ring is about the account and the name
@@ -278,7 +278,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .zai, .glmCoding: "zai"
         // One mark for both, since there is only one brand. Two accounts of one
         // provider already share a mark on the rail; this is the same case.
-        case .minimax, .minimaxCN: "minimax"
+        case .minimax: "minimax"
         case .copilot: "github"
         case .grok: "grok"
         // The parent brand's mark rather than Grok's own, which is the one
@@ -335,7 +335,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         // ledger cannot read it yet. False here means "no history shown",
         // which is true today and better than a column of zeroes.
         case .kiro, .antigravity, .cursor, .openCodeGo, .kimiCode, .ollamaCloud,
-             .zai, .glmCoding, .minimax, .minimaxCN, .copilot, .grok, .grokBot,
+             .zai, .glmCoding, .minimax, .copilot, .grok, .grokBot,
              .volcengine, .commandCode, .deepSeek, .devin, .xiaomiMiMo, .sub2api,
              .newAPI, .v2ex, .qoder, .stepFun, .pulseExtension: false
         }
@@ -348,10 +348,10 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     var supportsLocalActivity: Bool {
         guard let written = handWritten else { return false }
         return switch written {
-        case .claudeCode, .codex, .kiro, .zai, .glmCoding: true
-        case .antigravity, .cursor, .openCodeGo, .kimiCode, .ollamaCloud,
-             .minimax, .minimaxCN, .copilot, .grok, .grokBot, .volcengine,
-             .commandCode, .deepSeek, .devin, .xiaomiMiMo,
+        case .claudeCode, .codex, .kiro, .zai, .glmCoding, .commandCode, .antigravity: true
+        case .cursor, .openCodeGo, .kimiCode, .ollamaCloud,
+             .minimax, .copilot, .grok, .grokBot, .volcengine,
+             .deepSeek, .devin, .xiaomiMiMo,
              .sub2api, .newAPI, .v2ex, .qoder, .stepFun, .pulseExtension: false
         }
     }
@@ -369,8 +369,12 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
 
     /// How many rings a split account can produce. Fixed rather than counted
     /// from a reading, so the rail's own budget does not move when a provider
-    /// answers with one group short.
-    var modelGroupCount: Int { splitsByModelGroup ? 2 : 1 }
+    /// answers with one group short. Three since Antigravity added a weekly
+    /// allowance of its own for Gemini 4 Argon beside the Gemini and the
+    /// Claude-and-GPT ones (issue #106); at two, the third group left a split
+    /// account whole. The budget an account actually reserves is the groups
+    /// chosen to show (`AppSettings.shownModelGroups`), or this.
+    var modelGroupCount: Int { splitsByModelGroup ? 3 : 1 }
 
     /// Whether a spending history can be shown for this provider at all.
     ///
@@ -381,14 +385,24 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     /// data (it covers every machine) and the poorer (one token total per
     /// model, so nothing can be priced), which is what `UsageLedger.Origin`
     /// exists to keep straight.
-    var providesHistory: Bool { keepsLocalTranscripts || self == .zai || self == .glmCoding }
+    /// OpenCode Go joins them once its console session is kept: the console's
+    /// request log is the account's own record, priced as charged. DeepSeek
+    /// likewise once its console's sign-in is kept: the console's day-by-day
+    /// usage, charged in the account's own currency.
+    ///
+    /// **Exactly where the detailed card has one** (`cardHistory`), the Token
+    /// spend agents that borrow a provider's mark included — MiniMax Code for
+    /// MiniMax, the Kimi CLI for Kimi Code. The settings pane used to ask a
+    /// narrower question of its own, so those providers' cards had a history
+    /// their panes did not.
+    var providesHistory: Bool { cardHistory != nil }
 
     /// Whether the route to this provider's figures is a choice.
     ///
-    /// The two CLIs can each be read two ways, which is a setting. Antigravity
-    /// and Cursor have exactly one route each — a server one of them runs
-    /// itself, a login the other one stored — so it is stated rather than
-    /// offered.
+    /// **Every provider with more than one route offers the choice**, with
+    /// *Automatic* the default. Antigravity's are its desktop app's language
+    /// server and its `agy` CLI; Cursor has exactly one route, a login it
+    /// stored, so it is stated rather than offered.
     /// **Not `keepsLocalTranscripts`**, which it used to be. The two happened
     /// to agree while only the CLIs had a choice, and reading one for the other
     /// is the kind of coincidence that breaks silently: Volcengine has two routes
@@ -397,9 +411,9 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     var hasSourceChoice: Bool {
         guard let written = handWritten else { return false }
         return switch written {
-        case .claudeCode, .codex, .volcengine, .devin: true
-        case .kiro, .antigravity, .cursor, .openCodeGo, .kimiCode, .ollamaCloud,
-             .zai, .glmCoding, .minimax, .minimaxCN, .copilot, .grok, .grokBot,
+        case .claudeCode, .codex, .volcengine, .devin, .antigravity: true
+        case .kiro, .cursor, .openCodeGo, .kimiCode, .ollamaCloud,
+             .zai, .glmCoding, .minimax, .copilot, .grok, .grokBot,
              .commandCode, .deepSeek, .xiaomiMiMo, .sub2api, .newAPI, .v2ex, .qoder, .stepFun,
              .pulseExtension: false
         }
@@ -419,9 +433,6 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     var soleRoute: (name: String, note: String)? {
         guard let written = handWritten else { return profile?.soleRoute?() }
         return switch written {
-        case .antigravity:
-            (String.localized("Antigravity's language server"),
-             String.localized("Only while Antigravity is open."))
         case .cursor:
             (String.localized("Cursor's own login"),
              String.localized("Uses the login Cursor already saved."))
@@ -439,8 +450,8 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
              String.localized("Uses Kiro CLI's signed-in session without reading its credentials."))
         // Either a choice of routes, or a key the user pastes: both are asked
         // about elsewhere, so there is nothing here to state.
-        case .claudeCode, .codex, .openCodeGo, .kimiCode, .ollamaCloud,
-             .zai, .glmCoding, .minimax, .minimaxCN, .copilot, .volcengine,
+        case .claudeCode, .codex, .antigravity, .openCodeGo, .kimiCode, .ollamaCloud,
+             .zai, .glmCoding, .minimax, .copilot, .volcengine,
              .commandCode, .deepSeek, .devin, .xiaomiMiMo, .sub2api, .newAPI, .v2ex, .qoder, .stepFun:
             nil
         // Stated on its own pane, which names the program instead.
@@ -456,7 +467,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     /// anyone on the plan who doesn't run the CLI on this Mac.
     var usesAPIKey: Bool {
         if let profile { return profile.credential != .localLogin }
-        return [.openCodeGo, .kimiCode, .ollamaCloud, .zai, .glmCoding, .minimax, .minimaxCN, .volcengine,
+        return [.openCodeGo, .kimiCode, .ollamaCloud, .zai, .glmCoding, .minimax, .volcengine,
          .commandCode, .deepSeek, .devin, .xiaomiMiMo, .sub2api, .newAPI,
          .v2ex, .qoder, .stepFun].contains(self)
     }
@@ -487,7 +498,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     /// Whether this provider reports a prepaid balance that can be compared
     /// against a figure — so a "warn me below" line is worth offering.
     ///
-    /// **Not "reports a `creditBalance`".** Six providers set that, but it is
+    /// **Not "reports a `creditBalance`".** More providers set that, but it is
     /// a display string and Codex's is sometimes the word "Unlimited". This is
     /// the shorter list that also hands over `creditRemaining`, which is a
     /// number and a currency.

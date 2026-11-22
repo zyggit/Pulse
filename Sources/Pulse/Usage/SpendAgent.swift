@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// A coding agent that leaves a record of its work on this Mac.
@@ -277,6 +278,10 @@ enum SpendAgent: String, CaseIterable, Identifiable, Sendable {
         case .commandCode: .commandCode
         case .devinDesktop: .devin
         case .copilot: .copilot
+        // The desktop app's own usage, under the MiniMax account it is billed
+        // to (issue #86) — every model it answered with, routed ones too, as
+        // Command Code's are.
+        case .mcode: .minimax
         default: nil
         }
     }
@@ -292,6 +297,7 @@ enum SpendAgent: String, CaseIterable, Identifiable, Sendable {
         case .openCode, .openCodeReview: "opencode-go"
         case .kiloCLI, .kiloCode: "kilo"
         case .cline: "cline-pass"
+        case .commandCode: "commandcode"
         default: nil
         }
     }
@@ -387,6 +393,19 @@ enum SpendAgent: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Whether this agent's records say anything about the prompt cache.
+    ///
+    /// False for Goose and Kiro, whose stores keep input and output and no
+    /// cache column at all: their zero cache hits are not a measurement of a
+    /// cache that never hit, so the breakdown says the figure is not recorded
+    /// and the cache hit rate is left out.
+    var reportsCacheReads: Bool {
+        switch self {
+        case .goose, .kiro: false
+        default: true
+        }
+    }
+
     /// Whether this agent's native reader was checked against a real store on a
     /// real machine.
     ///
@@ -396,6 +415,20 @@ enum SpendAgent: String, CaseIterable, Identifiable, Sendable {
     var hasCapturedValidation: Bool {
         switch self {
         case .claudeCode, .codex, .openCode, .kiloCLI, .grok, .kimiCLI, .devinCLI: true
+        default: false
+        }
+    }
+
+    /// Whether the agent's reader emits records with no provider field a
+    /// filtered view could select on.
+    ///
+    /// The seven readers that predate the catalogue keep their own store
+    /// readers, and Devin Desktop's events carry no provider either, so a
+    /// `provider:` read over any of them returns empty rather than its whole
+    /// store under another provider's name.
+    var isLegacy: Bool {
+        switch self {
+        case .claudeCode, .codex, .openCode, .kiloCLI, .grok, .kimiCLI, .devinCLI, .devinDesktop: true
         default: false
         }
     }
@@ -412,18 +445,27 @@ enum SpendAgent: String, CaseIterable, Identifiable, Sendable {
     /// belongs to. `home` and `environment` are injected rather than read, so a
     /// test never touches the machine it runs on.
     ///
-    /// The seven legacy agents keep the exact home-relative paths they have
-    /// always used and do not honour an environment override; the rest are
-    /// resolved by their family, which does.
+    /// The seven agents that predate the catalogue keep the exact
+    /// home-relative paths they have always used and do not honour an
+    /// environment override, except Kimi Code's store beside the Kimi CLI's,
+    /// which honours `KIMI_CODE_HOME`; the rest are resolved by their family,
+    /// which does.
     func inputs(home: URL, environment: [String: String]) -> [URL] {
         guard !Task.isCancelled else { return [] }
         return switch self {
         case .claudeCode: [home.appending(path: ".claude/projects")]
-        case .codex: [home.appending(path: ".codex/sessions")]
+        // An archived session is still work done; `UsageLedgerReader` reads both.
+        case .codex: [home.appending(path: ".codex/sessions"), home.appending(path: ".codex/archived_sessions")]
         case .openCode: [home.appending(path: ".local/share/opencode/opencode.db")]
         case .kiloCLI: [home.appending(path: ".local/share/kilo/kilo.db")]
         case .grok: [home.appending(path: ".grok/sessions")]
-        case .kimiCLI: [home.appending(path: ".kimi/sessions")]
+        // Kimi Code took over from the Kimi CLI and keeps its own store;
+        // `KimiCLIStore` reads both, and counts a request found in both once.
+        case .kimiCLI: [
+            home.appending(path: ".kimi/sessions"),
+            (StructuredLogSupport.directory(environment, "KIMI_CODE_HOME") ?? home.appending(path: ".kimi-code"))
+                .appending(path: "sessions"),
+        ]
         case .devinCLI: [home.appending(path: ".local/share/devin/cli/sessions.db")]
         // Every other case is a catalog client, routed by its canonical id.
         default: AgentRecordReaders.inputs(client: sourceID, home: home, environment: environment)

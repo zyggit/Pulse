@@ -46,6 +46,8 @@ struct OpenCodeGoParsingTests {
         #expect(abs(windows[1].usedFraction - 0.10) < 0.000_001)
         #expect(abs(windows[2].usedFraction - 0.05) < 0.000_001)
         #expect(windows.allSatisfy { !$0.isExhausted })
+        // A week is seven days; a month only orders its row.
+        #expect(windows.map(\.reportsLength) == [true, true, false])
 
         // Milliseconds and bare-second ISO stamps both parse.
         #expect(windows[0].resetsAt == Self.dateComponents(2026, 9, 26, 18))
@@ -106,5 +108,16 @@ struct OpenCodeGoParsingTests {
         #expect(throws: (any Error).self) {
             try JSONDecoder().decode(OpenCodeGoUsageService.Reply.self, from: Data("not json at all".utf8))
         }
+    }
+
+    @Test("A key whose workspace has no Go subscription is no plan, not a refused key")
+    func entitlementIsNoPlan() {
+        let entitlement = Data(#"{"type":"error","error":{"type":"EntitlementError","message":"OpenCode Go subscription required."}}"#.utf8)
+        let unauthorized = Data(#"{"type":"error","error":{"type":"AuthError","message":"Unauthorized"}}"#.utf8)
+        #expect(OpenCodeGoUsageService.refusal(status: 403, body: entitlement) == .noPlan)
+        #expect(OpenCodeGoUsageService.refusal(status: 401, body: unauthorized) == .apiKeyRefused)
+        #expect(OpenCodeGoUsageService.refusal(status: 403, body: Data("<html>".utf8)) == .apiKeyRefused)
+        #expect(OpenCodeGoUsageService.refusal(status: 429, body: Data()) == .rateLimited)
+        #expect(OpenCodeGoUsageService.refusal(status: 200, body: Data()) == nil)
     }
 }

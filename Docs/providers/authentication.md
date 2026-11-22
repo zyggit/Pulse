@@ -12,7 +12,7 @@ This is not a catalogue of secrets. Client ids below are public (they ship in ev
 |---|---|---|
 | Pasted API key or Ollama session cookie | `keys.dat` (`APIKeyStore`) | Nobody. User pastes or re-reads the browser. |
 | Copilot GitHub token | `keys.dat` as well (`keepsOwnCredential`) | Sign in again. Device tokens here are not the CLI refresh path. |
-| Extra-account logins (Claude Code, Codex, Grok, Grok Bot) | `accounts.dat` (`AccountCredentialStore`) | `UsageStore.fetchAdded` via `OAuthLogin.refresh` for the three OAuth providers. Grok Bot has **no** refresh endpoint in Cursor’s client. |
+| Extra-account logins (Claude Code, Codex, Grok, Grok Bot) | `accounts.dat` (`AccountCredentialStore`) | `LiveUsageServices.fetchAdded` (`UsageServices.swift`) via `OAuthLogin.refresh` for the three OAuth providers. Grok Bot has **no** refresh endpoint in Cursor’s client. |
 
 Both files are AES-GCM boxes in Pulse’s Application Support folder, owner-only, key derived from this Mac rather than stored. `LocalSecrets` is shared so there is one copy of the crypto; a different derived key per purpose means a box from one store cannot be opened by the other.
 
@@ -28,7 +28,7 @@ Measured: a Codex access token lives on the order of 240 hours; a Claude Code on
 
 Pulse’s extra-account login has its own refresh token and does not read or write what the CLI stored. That separation is the reason for signing in.
 
-`fetchAdded` renews when the access token is within a minute of expiry. A renewal that fails reports `.signedOut`, not a network error: the remedy is the same and the user can act on it. That case names no provider.
+`fetchAdded` renews when the access token is within a minute of expiry. A renewal that fails reports `.signedOut`, not a network error: the remedy is the same and the user can act on it. That case names no provider. A renewal is written only over the login it renews (`AccountCredentialStore.renewed` / `acceptsRenewal`): not when a longer-lived one is already stored, not over another account's login in the same slot, and **never into an empty slot** — removing an account forgets its login, and a renewal still out at that moment used to write the forgotten tokens back.
 
 ## Extra accounts: who can have them
 
@@ -134,21 +134,26 @@ Tokens last about **sixty days** (measured from `exp` on one Mac). No refresh en
 
 `OAuthLogin.Configuration.of(.grokBot)` is nil. `fetchAdded` still calls `OAuthLogin.refresh` when the token is no longer fresh; that fails closed into `.signedOut`, which is the honest path.
 
+**A renewal that fails is classified, not assumed signed out** (`LiveUsageServices.renewalFailure`). The token endpoint not answering is `.unreachable`, a 429 `.rateLimited`, a 5xx `.serverError`, an unreadable reply `.unreadableReply`; only a refusal (400/401/403, such as `invalid_grant`) or a provider with no renewal is `.signedOut`. Every failure used to be `.signedOut`, which takes no cached reading, so a dropped network cleared the ring and asked for a sign-in over a login that was still good. `OAuthLogin.post` throws `.unreachable` and `.rejected(status:detail:)` for this; the sign-in pane shows them with the same words as before. `RenewalFailureTests`.
+
 Pulse does **not** read `~/Library/Application Support/Grok Bot/sand-secrets.json`. That file was identified during investigation; the extra-account token Pulse obtained itself is what is stored.
 
 ## Browser cookies
 
-[`BrowserCookies.swift`](../../Sources/Pulse/Auth/BrowserCookies.swift) exists because Ollama publishes no quota API. It is no longer Ollama's alone: Xiaomi Coding Plan, Qoder and StepFun read the same way among the hand-written providers, and every profiled provider whose `ProviderProfile.Credential` is `.sessionCookie` reads through the same function (`SettingsView` calls `BrowserCookies.session(forHost:allowing:keep:)` for both). Which providers that is, and the one with `.browserStorage` (a `localStorage` value via `ChromiumLocalStorage` instead of a cookie), is a count worth checking in [`README.md`](README.md#profiled-providers) rather than copying here. Ollama's own setup, host filter, and parser rules: [`../ollama-cloud.md`](../ollama-cloud.md).
+[`BrowserCookies.swift`](../../Sources/Pulse/Auth/BrowserCookies.swift) exists because Ollama publishes no quota API. It is no longer Ollama's alone: Xiaomi Coding Plan, Qoder and StepFun read the same way among the hand-written providers, and every profiled provider whose `ProviderProfile.Credential` is `.sessionCookie` reads through the same function (`ProviderCredentialModel` calls `BrowserCookies.session(forHost:allowing:keep:)` for both). Which providers that is, and the one with `.browserStorage` (a `localStorage` value via `ChromiumLocalStorage` instead of a cookie), is a count worth checking in [`README.md`](README.md#profiled-providers) rather than copying here. Ollama's own setup, host filter, and parser rules: [`../ollama-cloud.md`](../ollama-cloud.md).
 
-**User-browser cookie reading is not how Claude, Cursor, or anyone else authenticates.** Claude Desktop borrows the *desktop app’s* Chromium cookie store (`sessionKey` / `sessionKeyV3` on `claude.ai`) via [`ClaudeDesktopSession`](../../Sources/Pulse/Providers/ClaudeDesktopSession.swift) — a different path, gated on a Keychain grant for `Claude Safe Storage`. Cursor **builds** a `WorkosCursorSessionToken` from the editor’s SQLite token; it does not open Safari or Chrome.
+**User-browser cookie reading is not how Claude, Cursor, or anyone else authenticates.** Claude Desktop borrows the *desktop app’s* Chromium cookie store (`sessionKey` / `sessionKeyV3` on `claude.ai`) via [`ClaudeDesktopSession`](../../Sources/Pulse/Providers/ClaudeDesktopSession.swift) — a different path, gated on a Keychain grant for `Claude Safe Storage`. Cursor **builds** a `WorkosCursorSessionToken` from the editor’s SQLite token; it does not open Safari or Chrome. When that token is sealed (`cursor-safe-storage:v1:`), unsealing it needs a Keychain grant for `Cursor Safe Storage` — the same Electron safeStorage scheme, through [`BrowserCookies`](../../Sources/Pulse/Auth/BrowserCookies.swift), documented with the Cursor route in [`cursor.md`](cursor.md).
 
 Failure class this feature keeps rediscovering: **a wrong lookup reads as an empty one**, then the next browser is tried, and Settings reports a session from a browser the user never signed in at.
 
 - Safari host match must not be a suffix (`notollama.com`).
 - Duplicate cookie names are normal (host-only + domain); throwing discarded the whole browser.
 - Edge’s keychain service is `Microsoft Edge Safe Storage`, not a name derived from the display string “Edge”.
-- Default browser first, even if it prompts. A cheap browser with a months-stale session is worse than a prompt.
+- **Default browser** (the menu's first entry, named with the browser when Pulse can read it) opens this Mac's default browser and no other, even if it prompts (`BrowserCookies.defaultOnly`). A cheap browser with a months-stale session is worse than a prompt; trying the rest after it stacked one keychain prompt per Chromium browser (changed 2026-11-11, at the user's request). A default browser Pulse cannot read says so and asks for a choice from the list.
 - Naming a browser in Settings means *only* that one is opened.
+- **A read that comes back late keeps nothing** (`ProviderCredentialModel.sessionReadID`). The keychain prompt can hold a read for as long as it is up; switching Qoder's or StepFun's site meanwhile, forgetting the session or saving a key by hand gives the read a new id, and a read whose id or host no longer matches stores nothing. Before this, switching sites during the prompt saved the old site's session after the switch had cleared it, and the refresh that followed sent it to the new site.
+- **A request carrying a session in a hand-set `Cookie` header never follows a redirect** (`NoRedirects`). URLSession forwards hand-set headers to wherever a 3xx points, another host included. `ProfileHTTP` always did this; Qoder, StepFun, Xiaomi, OpenCode Go and its console, and Claude Desktop's session did not until 2026-11-05. A 3xx arrives as itself and is read as the session being turned away. `CookieRedirectTests` pins it with a stubbed cross-host 302.
+- **A store macOS refuses is said as a refusal, not as a missing session.** Full Disk Access, and since macOS 26 the permission to read other apps' data, are tied to the code signature; Pulse is ad-hoc signed, so an update can lose them, and then every store opens as empty. When a read finds nothing, `BrowserCookies.refused` opens each store's folder and file and looks for `EPERM` / `EACCES`; if any was refused, Settings names that browser and points to Full Disk Access (remove and re-add when it is already on) instead of telling the user to sign in again (issue #101). A refused folder cannot be listed, so `present()` leaves that browser out and `refused` checks the folders itself.
 
 Parsers were driven against data built on purpose (synthetic `binarycookies`, Chromium values encrypted with the documented scheme). File discovery on a real machine is not claimed as verified here.
 
@@ -156,7 +161,7 @@ Parsers were driven against data built on purpose (synthetic `binarycookies`, Ch
 
 There is no way to ask the Keychain for an item silently (`SecKeychainSetUserInteractionAllowed` is deprecated with no replacement). [`AppDelegate`](../../Sources/Pulse/App/AppDelegate.swift) asks for `Claude Safe Storage` once at launch, fenced three ways: a desktop cookie store exists, Claude Code is enabled with source Automatic or Desktop App, and **once** — a refusal is a decision.
 
-`.automatic` then reads the remembered grant (`usageIfAlreadyPermitted`) rather than raising the dialog. Pinning `.desktopApp` calls `usage` directly, so a first-time pin can prompt there.
+`.automatic` then reads the remembered grant (`attemptIfAlreadyPermitted`) rather than raising the dialog. Pinning `.desktopApp` calls `usage` directly, so a first-time pin can prompt there.
 
 A grant that stops working is asked about again rather than treated as asked-and-refused: the Keychain ties the allowance to the code signature, and Pulse is ad-hoc signed, so every update is a different app as far as the ACL is concerned.
 

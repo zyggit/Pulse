@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Sakana AI's subscription: a five-hour and a weekly limit, each stated as a
@@ -178,10 +179,6 @@ enum SakanaUsageService {
     }
 
     static func money(_ amount: Double) -> String {
-        amount.formatted(
-            .currency(code: "USD")
-                .precision(.fractionLength(2))
-                .locale(LocalizationSource.locale)
-        )
+        amount.formatted(Money.reportedStyle("USD"))
     }
 }

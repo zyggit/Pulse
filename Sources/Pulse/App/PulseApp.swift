@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import AppKit
 import SwiftUI
 
@@ -35,9 +36,19 @@ enum PulseMain {
             exit(UsageReport.run())
         }
 
+        // The recap probe: read-only like `--json`, so it is settled before
+        // the migration for the same reason.
+        if CommandLine.arguments.contains(RecapReport.modeArgument) {
+            RecapReport.run(arguments: CommandLine.arguments)
+        }
+
         // Before anything reads a setting: running from a bundle changes
         // which `UserDefaults` domain that means.
         LegacyDefaults.migrateIfNeeded()
+
+        // After the migration, so it reads the bundle's domain; before the
+        // settings are restored, which marks even a fresh install as run.
+        UpdateMessage.noteLaunch()
 
         PulseApp.main()
     }

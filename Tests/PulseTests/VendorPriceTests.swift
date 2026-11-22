@@ -85,17 +85,17 @@ struct VendorPriceTests {
         #expect(withoutVendor.days.first?.unpricedTokens == tally.total)
     }
 
-    @Test("A pre-vendor price cache is only an offline fallback after upgrade")
+    @Test("A price cache without tiers is only an offline fallback after upgrade")
     func previousTableDoesNotBlockUpgrade() throws {
         let root = URL.temporaryDirectory.appending(path: "PulsePriceUpgrade-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let previous = ModelPrices.Cache(fetchedAt: Date(), prices: ["direct": Self.table["deepseek-v4-flash"]!])
-        try JSONEncoder().encode(previous).write(to: root.appending(path: "model-prices-3.json"))
+        try JSONEncoder().encode(previous).write(to: root.appending(path: "model-prices-4.json"))
         #expect(ModelPrices.readCache(in: root) == nil)
         #expect(ModelPrices.readCache(in: root, allowPreviousVersion: true)?.prices == previous.prices)
         let current = ModelPrices.Cache(fetchedAt: Date(), prices: Self.table)
-        try JSONEncoder().encode(current).write(to: root.appending(path: "model-prices-4.json"))
+        try JSONEncoder().encode(current).write(to: root.appending(path: "model-prices-5.json"))
         #expect(ModelPrices.readCache(in: root)?.prices == current.prices)
         #expect(ModelPrices.readCache(in: root, allowPreviousVersion: true)?.prices == current.prices)
     }
@@ -141,5 +141,30 @@ struct VendorPriceTests {
         let direct = AgentLedgers.read(agent, prices: firstParty, home: root, environment: [:]).ledger
         #expect(direct.allTime.cost == 1)
         #expect(direct.sessions.first?.cost == 1)
+    }
+}
+
+/// Command Code's records name `deepseek-v4.1-flash`, which DeepSeek does not
+/// list and Command Code's own price list sells as
+/// `deepseek/deepseek-v4.1-flash`.
+struct CommandCodeVendorPriceTests {
+    private static var document: [String: Any] { [
+        "deepseek": ["models": ["deepseek-v4-flash": ["cost": ["input": 0.27, "output": 1.1]]]],
+        "commandcode": ["models": [
+            "deepseek/deepseek-v4.1-flash": ["cost": ["input": 0.15, "output": 0.6, "cache_read": 0.003]],
+            "deepseek/deepseek-v4-flash": ["cost": ["input": 9, "output": 9]],
+        ]],
+    ] }
+
+    @Test("Command Code's own list prices a model DeepSeek does not, by its bare name")
+    func barePrice() throws {
+        let table = try #require(ModelPrices.table(from: Self.document))
+        let price = ModelPrices.price(for: "deepseek-v4.1-flash", in: table, vendor: SpendAgent.commandCode.priceVendor)
+        #expect(price?.input == 0.15)
+        #expect(price?.cacheRead == 0.003)
+        // Never for anyone who did not ask for Command Code's list.
+        #expect(ModelPrices.price(for: "deepseek-v4.1-flash", in: table) == nil)
+        // And never over the maker's own rate.
+        #expect(ModelPrices.price(for: "deepseek-v4-flash", in: table, vendor: "commandcode")?.input == 0.27)
     }
 }

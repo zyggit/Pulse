@@ -1,6 +1,8 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import SwiftUI
 
-/// What the panel's shapes are filled with: flat black, or Liquid Glass.
+/// What the panel's shapes are filled with: flat black, flat light, or Liquid
+/// Glass.
 ///
 /// Black is the default and stays it. The panel sits over whatever the user is
 /// working on all day, and a solid surface is the one that is legible over
@@ -22,8 +24,14 @@ struct PanelSurface<S: Shape>: View {
     /// Tints the surface when a limit is close enough to matter. Nil leaves it
     /// neutral.
     var tint: Color?
+    /// The side lying against the screen's edge, if any: the light panel's
+    /// hairline is left off it, where it would be a grey line along the very
+    /// edge of the display.
+    var screenEdge: Edge.Set = []
     /// The reader's setting, handed down from the panel's root.
     @Environment(\.glassTransparency) private var transparency
+    /// Light only when the reader chose the light panel; the root pins it.
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         // Deliberately hit-testable, and the panel cannot be dragged without
@@ -48,6 +56,39 @@ struct PanelSurface<S: Shape>: View {
     private var surface: some View {
         if usesGlass {
             glass
+        } else if colorScheme == .light {
+            shape.fill(tint ?? PanelLight.fill)
+                // Black over a black window loses its edge too, but light over
+                // a white page is the usual case for this surface, and without
+                // the line the card's tail is all that says where it ends.
+                //
+                // **Inside the outline, not outside.** The window is exactly
+                // card + rail wide, so the rail's far side and the card's far
+                // side lie on the window's edge, and the half of a line drawn
+                // outside them was cut off — that side looked sliced (#74).
+                // Outlined from the *normalized* path: the card's tail is its
+                // own subpath overlapping the body, and stroking that as it
+                // stands draws the body's edge straight through the join.
+                .overlay {
+                    let outline = PanelOutline(shape: shape)
+                        .stroke(PanelLight.edge, lineWidth: PanelLight.edgeWidth * 2)
+                        .clipShape(shape)
+                    // Masked only where a side lies on the screen; the card and
+                    // a free rail have none, and need no extra pass. **Only
+                    // that side:** the mask reaches far past the frame on the
+                    // others, because a rail pulled off its edge is drawn
+                    // outside the frame (`DropletTether`), and a mask the size
+                    // of the frame cut its hairline off there.
+                    if screenEdge.isEmpty {
+                        outline
+                    } else {
+                        outline.mask {
+                            Rectangle()
+                                .padding(screenEdge, PanelLight.edgeWidth)
+                                .padding(Edge.Set.all.subtracting(screenEdge), -2000)
+                        }
+                    }
+                }
         } else {
             shape.fill(tint ?? .black)
         }
@@ -100,6 +141,54 @@ enum PanelGlass {
     /// replaces it on the sliver.
     static func dim(transparency: Double) -> Color {
         .black.opacity((1 - min(max(transparency, 0), 1)) * maximumDim)
+    }
+
+    /// Where the text starts to darken: the default, so nobody who left the
+    /// slider alone sees anything change.
+    static let inkTurns = 0.5
+    /// Where the rest of the panel follows the text into the light scheme —
+    /// hairlines, tracks and the deeper usage colours (`Color.pulse*`). Past
+    /// here the text is darker than mid grey.
+    static let schemeTurns = 0.75
+
+    /// The text's colour on glass: white (the dark scheme's label colour) up
+    /// to `inkTurns`, then darkening with the slider to black at its clearest
+    /// end. Nil where the scheme's own label colour is the answer.
+    ///
+    /// **The reader asked for this, knowing the cost.** Clear glass takes on
+    /// whatever is behind it; past the middle the panel is mostly the page
+    /// under it, which is usually light, so white text vanished there. Black
+    /// text vanishes over a dark window instead — Pulse cannot see what is
+    /// behind the panel without recording the screen — and the slider's
+    /// caption says so.
+    static func ink(transparency: Double) -> Color? {
+        let t = min(max(transparency, 0), 1)
+        guard t > inkTurns else { return nil }
+        let white = 1 - (t - inkTurns) / (1 - inkTurns)
+        // At the opacity the label colour has, so the step off it is not seen.
+        return Color(white: white, opacity: 0.85)
+    }
+
+    static func scheme(transparency: Double) -> ColorScheme {
+        transparency > schemeTurns ? .light : .dark
+    }
+}
+
+/// The light panel's surface (#74). Not pure white: on a white page that is
+/// a hole with a hairline round it, and the slight grey reads as a surface.
+enum PanelLight {
+    static let fill = Color(white: 0.97)
+    static let edge = Color.black.opacity(0.12)
+    static var edgeWidth: CGFloat { 1 }
+}
+
+/// A shape's outline with its overlaps dissolved, so a stroke follows only
+/// the outside of the union.
+private struct PanelOutline<S: Shape>: Shape {
+    let shape: S
+
+    func path(in rect: CGRect) -> Path {
+        shape.path(in: rect).normalized(eoFill: false)
     }
 }
 

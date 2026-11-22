@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// TypeSafe: the credit balance on the console's billing page, read with the
@@ -250,10 +251,6 @@ enum TypeSafeUsageService {
     /// The console prices and shows credit in dollars; the reply carries the
     /// figure only.
     static func money(_ amount: Double) -> String {
-        amount.formatted(
-            .currency(code: "USD")
-                .precision(.fractionLength(2))
-                .locale(LocalizationSource.locale)
-        )
+        amount.formatted(Money.reportedStyle("USD"))
     }
 }

@@ -38,17 +38,17 @@ A `## x.y.z` section at the top of `CHANGELOG.md`, **above** the previous one. I
 
 **新功能**
 
-- **一句话说清楚是什么。** 再用一两句说怎么用、在哪里打开。感谢 [@name](https://github.com/qunqin24/Pulse/issues/NN) 提议。
+- **短标题。** 一句话：是什么、在哪开启。感谢 [@name](https://github.com/qunqin24/Pulse/issues/NN) 提议。
 
 **改进与修复**
 
-- **用户看得到的变化。** 原因一句话。
+- **用户看得到的变化。** 一句话。[#NN](https://github.com/qunqin24/Pulse/issues/NN)
 
 **English**
 
 **New**
 
-- **The same items, in the same order.** …
+- **The same items, in the same order.** One sentence. …
 
 **Changed and fixed**
 
@@ -56,12 +56,15 @@ A `## x.y.z` section at the top of `CHANGELOG.md`, **above** the previous one. I
 ```
 
 - Both `**中文**` and `**English**` markers are required; the workflow refuses an entry without them.
+- **Open WebUI's shape** ([its changelog](https://github.com/open-webui/open-webui/blob/main/CHANGELOG.md)), without the emoji: a short bold title, **one sentence** — what it is and where to turn it on — and the issue / PR links. No background, reasoning or caveats; link the Docs page instead.
 - Only what a user notices. Refactors, tests and docs stay out.
 - Thank the reporter of any issue the release closes, linking the issue.
 - Grammar is limited to bullets, `**bold**`, `` `code` `` and links (`Scripts/changelog.py`).
 - Validate: `python3 Scripts/changelog.py x.y.z > /dev/null` must exit cleanly.
 
-If a new feature is user-visible, add it to the feature list in **all five** READMEs (`README.md`, `README.zh-CN.md`, `README.zh-Hant.md`, `README.ja.md`, `README.ko.md`), in its own commit before the release commit.
+**The note after the update** is separate from the CHANGELOG: ask the user whether they want one for this version. If they do, they dictate it; write it to `Messages/x.y.z/<language>.md` (six files, or at least `en.md`, which every other language falls back to) and commit it to `main`. It is read from GitHub, so it can also go up after the tag. See `Messages/README.md`.
+
+If a new feature is user-visible, add it to the feature list in **all six** READMEs (`README.md`, `README.zh-CN.md`, `README.zh-Hant.md`, `README.ja.md`, `README.ko.md`, `README.ru.md`), in its own commit before the release commit.
 
 ## 4. Commit, tag, push
 

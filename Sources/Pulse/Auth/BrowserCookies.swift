@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import AppKit
 import CommonCrypto
 import Foundation
@@ -40,6 +41,7 @@ enum BrowserCookies {
         case brave
         case vivaldi
         case arc
+        case egoLite
 
         var name: String {
             switch self {
@@ -50,6 +52,7 @@ enum BrowserCookies {
             case .brave: "Brave"
             case .vivaldi: "Vivaldi"
             case .arc: "Arc"
+            case .egoLite: "ego lite"
             }
         }
 
@@ -69,6 +72,7 @@ enum BrowserCookies {
             case .brave: "Brave Safe Storage"
             case .vivaldi: "Vivaldi Safe Storage"
             case .arc: "Arc Safe Storage"
+            case .egoLite: "ego safe storage"
             }
         }
 
@@ -78,7 +82,7 @@ enum BrowserCookies {
         var promptsForKeychain: Bool {
             switch self {
             case .firefox, .safari: false
-            case .chrome, .edge, .brave, .vivaldi, .arc: true
+            case .chrome, .edge, .brave, .vivaldi, .arc, .egoLite: true
             }
         }
     }
@@ -133,6 +137,64 @@ enum BrowserCookies {
         return [preferred] + installed.filter { $0 != preferred }
     }
 
+    /// What **Default browser** reads: this Mac's default browser, when it is
+    /// one of `candidates`, and nothing else. Not the default and then the
+    /// rest: each Chromium browser asks for the keychain on its own, and a
+    /// session found in a browser the reader did not mean is no help.
+    static func defaultOnly(among candidates: [Browser]) -> [Browser] {
+        guard let preferred = preferred(), candidates.contains(preferred) else { return [] }
+        return [preferred]
+    }
+
+    /// The browsers whose cookies are on disk but macOS would not let Pulse
+    /// open — Full Disk Access, or since macOS 26 the separate permission to
+    /// read other apps' data, which an update of an ad-hoc signed app loses.
+    ///
+    /// Asked only after a read found nothing, so Settings can say *why*. A
+    /// refusal and a missing session look the same from `session`, and one
+    /// said as the other sent somebody to sign in again at a site where they
+    /// were already signed in (issue #101). A refused folder is not even
+    /// listed, so `present()` leaves the browser out and this has to look
+    /// for itself.
+    static func refused(_ browsers: [Browser] = Browser.allCases) -> [Browser] {
+        browsers.filter { browser in
+            switch browser {
+            case .firefox:
+                return isRefused(firefoxRoot, folder: true)
+                    || firefoxStores().contains { isRefused($0, folder: false) }
+            case .safari:
+                return safariCandidates.contains { isRefused($0, folder: false) }
+            default:
+                guard let root = chromiumRoot(browser) else { return false }
+                return isRefused(root, folder: true)
+                    || chromiumStores(browser).contains { isRefused($0, folder: false) }
+            }
+        }
+    }
+
+    /// What Settings says when a read found nothing and some store was
+    /// refused, or nil when none was. One browser is named — the default one
+    /// when it is among them — because the remedy is the same for all.
+    static func refusalMessage(_ refused: [Browser]) -> String? {
+        guard let first = refused.first else { return nil }
+        let named = preferred().flatMap { refused.contains($0) ? $0 : nil } ?? first
+        return String.localized("macOS didn't allow Pulse to read \(named.name)'s cookies. In System Settings › Privacy & Security › Full Disk Access, turn on Pulse (if it is already on, remove it and add it again), then quit and reopen Pulse.")
+    }
+
+    /// Whether opening this is refused, as opposed to missing. A path that
+    /// does not exist is `ENOENT`, which is no refusal.
+    private static func isRefused(_ url: URL, folder: Bool) -> Bool {
+        if folder {
+            guard let handle = opendir(url.path) else { return errno == EPERM || errno == EACCES }
+            closedir(handle)
+        } else {
+            let descriptor = open(url.path, O_RDONLY)
+            guard descriptor >= 0 else { return errno == EPERM || errno == EACCES }
+            close(descriptor)
+        }
+        return false
+    }
+
     /// The browser this Mac opens links with.
     ///
     /// Asked of LaunchServices rather than guessed from what is installed:
@@ -152,6 +214,7 @@ enum BrowserCookies {
         case "com.brave.Browser", "com.brave.Browser.beta": .brave
         case "com.vivaldi.Vivaldi": .vivaldi
         case "company.thebrowser.Browser": .arc
+        case "com.citrolabs.ego.lite": .egoLite
         default: nil
         }
     }
@@ -160,19 +223,24 @@ enum BrowserCookies {
 
     private static var home: URL { URL(fileURLWithPath: NSHomeDirectory()) }
 
+    private static var firefoxRoot: URL { home.appending(path: "Library/Application Support/Firefox/Profiles") }
+
     private static func firefoxStores() -> [URL] {
-        let root = home.appending(path: "Library/Application Support/Firefox/Profiles")
-        let profiles = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        let profiles = (try? FileManager.default.contentsOfDirectory(at: firefoxRoot, includingPropertiesForKeys: nil)) ?? []
         return profiles
             .map { $0.appending(path: "cookies.sqlite") }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    private static func safariStores() -> [URL] {
+    private static var safariCandidates: [URL] {
         [
             home.appending(path: "Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"),
             home.appending(path: "Library/Cookies/Cookies.binarycookies"),
-        ].filter { FileManager.default.fileExists(atPath: $0.path) }
+        ]
+    }
+
+    private static func safariStores() -> [URL] {
+        safariCandidates.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     static func chromiumRoot(_ browser: Browser) -> URL? {
@@ -183,6 +251,7 @@ enum BrowserCookies {
         case .brave: support.appending(path: "BraveSoftware/Brave-Browser")
         case .vivaldi: support.appending(path: "Vivaldi")
         case .arc: support.appending(path: "Arc/User Data")
+        case .egoLite: support.appending(path: "Citro Labs/ego lite")
         case .firefox, .safari: nil
         }
     }

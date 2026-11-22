@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Actions for the credential or tool that this account actually uses.
@@ -44,15 +45,15 @@ enum ConnectionRemedy: Equatable {
              .xiaomiSessionMissing, .xiaomiSessionExpired,
              .qoderSessionMissing, .qoderSessionExpired,
              .stepFunSessionMissing, .stepFunSessionExpired: return .readBrowser
-        case .claudeDesktopKeyRefused, .unreachable, .rateLimited, .serverError,
-             .codexServerFailed, .extensionTimedOut, .extensionFailed: return .retry
+        case .claudeDesktopKeyRefused, .cursorKeyRefused, .unreachable, .systemProxyOff, .rateLimited,
+             .serverError, .codexServerFailed, .extensionTimedOut, .extensionFailed: return .retry
         // Its login is the program's own, so the page that says how an
         // extension works is the nearest thing to a remedy Pulse has.
         case .extensionMissing, .extensionSignedOut: return .help
         case .sessionMissing, .sessionExpired: return .readBrowser
         case .localLoginMissing, .localLoginExpired, .localAppMissing, .noPlan: return .help
         case .codexNotInstalled, .kiroNotInstalled, .kiroVersionUnsupported,
-             .volcengineCLIMissing, .noLimitsReported,
+             .volcengineCLIMissing, .antigravityCLIMissing, .antigravityCLIOutdated, .noLimitsReported,
              .grokBotNotIncluded, .zaiNoCodingPlan, .xiaomiNoCodingPlan, .qoderNoCredits,
              .stepFunNoPlan,
              .ollamaPageChanged, .unreadableReply:
@@ -96,7 +97,7 @@ enum ConnectionRemedy: Equatable {
             case .ollamaCloud: "ollama-cloud"
             case .xiaomiMiMo: "xiaomi-coding-plan"
             case .zai, .glmCoding: "zai"
-            case .minimax, .minimaxCN: "minimax"
+            case .minimax: "minimax"
             case .copilot: "copilot"
             case .grok: "grok"
             case .grokBot: "grok-bot"

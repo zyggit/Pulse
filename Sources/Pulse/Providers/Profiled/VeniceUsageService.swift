@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Venice: the balance its API spends from — US dollars, or DIEM, the token
@@ -106,11 +107,7 @@ enum VeniceUsageService {
     }
 
     static func money(_ amount: Double) -> String {
-        amount.formatted(
-            .currency(code: "USD")
-                .precision(.fractionLength(2))
-                .locale(LocalizationSource.locale)
-        )
+        amount.formatted(Money.reportedStyle("USD"))
     }
 
     /// DIEM is a token's symbol, the same in every language, so it follows

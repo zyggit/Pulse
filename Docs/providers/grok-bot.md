@@ -2,7 +2,7 @@
 
 Service: [`GrokBotUsageService.swift`](../../Sources/Pulse/Providers/GrokBotUsageService.swift). Cookie: [`CursorAppLogin.swift`](../../Sources/Pulse/Auth/CursorAppLogin.swift). Extra accounts: [`CursorWebLogin.swift`](../../Sources/Pulse/Auth/CursorWebLogin.swift), [authentication.md](authentication.md).
 
-**Current behaviour lives here.** The pre-implementation investigation is historical: [`../grok-bot-usage.md`](../grok-bot-usage.md). Where that file and this one disagree, this file and the service win.
+**Current behaviour lives here.** The pre-implementation investigation is historical: [`../history/grok-bot-usage.md`](../history/grok-bot-usage.md). Where that file and this one disagree, this file and the service win.
 
 Grok Bot is xAI’s, sold through Cursor and billed against the **Cursor** account. It is not a share of Cursor’s monthly model pools, and it is not the SuperGrok weekly pool [grok.md](grok.md) reads. Two companies’ bills, one brand: they share no credential, no endpoint, and **no mark** (`grok.svg` vs `xai.svg`).
 
@@ -26,7 +26,7 @@ The investigation also documented Connect RPC `POST https://api2.cursor.sh/aiser
 
 `usagePercent` is how much is **gone**, 0…100.
 
-**The reply often states no reset and no length.** On the account measured at implementation, neither REST nor RPC carried `nextResetTimestampUtc` — only `currentPeriodStart`. The field is read where a reply offers one; the row has no reset line where it does not. Seven days are a **sort key** (`reportsLength: false`). That it is weekly is xAI’s own word ([Grok Bot FAQ](https://docs.x.ai/grok-bot/faq)), not an inference from a start stamp.
+**The reply often states no reset and no length.** On the account measured at implementation, neither REST nor RPC carried `nextResetTimestampUtc` — only `currentPeriodStart`. The field is read where a reply offers one; the row has no reset line where it does not. Some accounts now carry it. **When a reply states both `currentPeriodStart` and `nextResetTimestampUtc`, their difference is the period's length** (`reportsLength: true`, `GrokBotUsageService.measuredSeconds`; #111), the same evidence `GrokUsageService.window` accepts, so the window clock and the forecast use it — but only a span between six and eight days: xAI calls the allowance weekly, and a span far from that means the stamps do not bound the same week. With either missing, seven days are a **sort key** (`reportsLength: false`). That it is weekly is xAI’s own word ([Grok Bot FAQ](https://docs.x.ai/grok-bot/faq)), not an inference from a start stamp.
 
 **Do not derive reset from `currentPeriodStart` + 7 days.** The vendor’s own client does not. Inside `Grok Bot.app` (`Contents/Resources/app.asar`): `nextResetMs: n != null && Number.isFinite(n) && n > 0 ? n : null` where `n` is `nextResetTimestampUtc`. The same bundle’s schema marks both timestamps as proto3 **message** fields (explicit presence) — absent is unset, not a zero the serialiser dropped.
 
@@ -57,4 +57,4 @@ Pulse does not read the standalone app’s `sand-secrets.json`.
 
 ## Investigation leftovers (not current work)
 
-[`../grok-bot-usage.md`](../grok-bot-usage.md) still records: native Grok Bot client extra headers were not fully compared; Pulse chose not to decrypt `sand-secrets.json`. Those are historical open questions, not a claim that current REST-cookie behaviour is unverified in code. No runtime test of a live account is claimed in this directory.
+[`../history/grok-bot-usage.md`](../history/grok-bot-usage.md) still records: native Grok Bot client extra headers were not fully compared; Pulse chose not to decrypt `sand-secrets.json`. Those are historical open questions, not a claim that current REST-cookie behaviour is unverified in code. No runtime test of a live account is claimed in this directory.

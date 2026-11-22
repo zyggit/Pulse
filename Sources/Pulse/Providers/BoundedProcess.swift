@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Runs a helper program with a ceiling on both time and output, off the
@@ -19,6 +20,13 @@ import Foundation
 ///    blocking work called from an `async` function; parked on a cooperative
 ///    thread it takes one of a core-width pool with it, and a few of those
 ///    stop Swift concurrency across the whole app.
+///    **At user-initiated priority, not utility.** The wait is what enforces
+///    the deadline, and macOS coalesces and defers a utility thread's
+///    wake-ups when the machine is busy: under load a one-second deadline
+///    was acted on 15–23 seconds late, which failed the kill-timing tests on
+///    every release run of 1.12.4 and one of them in most local full runs.
+///    Raised, two local full runs in a row passed. The thread mostly sleeps;
+///    the priority only makes it wake when it was asked to.
 ///
 /// A pass that never finishes never calls `scheduleNext`, so a hang here is
 /// not one provider being slow — it is the rail freezing until something else
@@ -69,7 +77,7 @@ enum BoundedProcess {
         outputCeiling: Int
     ) async -> Result<Data, Failure> {
         await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
+            DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(returning: blocking(
                     binary, arguments,
                     environment: environment,
@@ -224,11 +232,13 @@ private final class Collected: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         // Past the ceiling the bytes are dropped, never the reading — see
-        // `BoundedProcess.blocking`.
+        // `BoundedProcess.blocking`. The chunk that crosses it is cut to what
+        // is left, so the ceiling is exact rather than exceeded by up to one
+        // read.
         if toStandardOutput {
-            if standardOutput.count < ceiling { standardOutput.append(chunk) }
-        } else if standardError.count < ceiling {
-            standardError.append(chunk)
+            standardOutput.append(chunk.prefix(max(0, ceiling - standardOutput.count)))
+        } else {
+            standardError.append(chunk.prefix(max(0, ceiling - standardError.count)))
         }
     }
 

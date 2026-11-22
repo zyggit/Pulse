@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// One rate-limit window exactly as a provider reports it.
@@ -33,8 +34,8 @@ extension UsageWindow {
     /// is the plan *plus* any pack bought on top, so buying one raises the
     /// limit and drops the fraction forty points with nothing reset — the
     /// top-up case again, inside a figure that does also reset. A fall is
-    /// therefore not evidence for `.credits` or `.sharedCredits`; only a reset
-    /// time that moved forward is.
+    /// therefore not evidence for `.credits`, `.sharedCredits` or the parts of
+    /// Qoder's total; only a reset time that moved forward is.
     func hasTurnedOver(since fraction: Double, resetsAt previous: Date?) -> Bool {
         guard kind != .balance, kind != .topUp else { return false }
         // A minute of slack: a reset time is often rounded, and a second of
@@ -42,7 +43,10 @@ extension UsageWindow {
         let movedOn = resetsAt.map { new in
             previous.map { new.timeIntervalSince($0) > 60 } ?? false
         } ?? false
-        if kind == .credits || kind == .sharedCredits { return movedOn }
+        switch kind {
+        case .credits, .sharedCredits, .planCredits, .dedicatedCredits: return movedOn
+        default: break
+        }
         return movedOn || fraction - usedFraction >= 0.4
     }
 }
@@ -96,12 +100,23 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
         /// reported beside the member's own. Its own kind so the two rows are
         /// told apart on the card, and so they are never summed into one.
         case sharedCredits
+        /// Two of the three parts Qoder's `total_quota` adds up, drawn on
+        /// their own when the reader asks for them: the plan's own credits,
+        /// and the credits tied to one model family. The third, a resource
+        /// pack bought on top, is a `.topUp`. Each is spent and lapses on its
+        /// own, so the sum can read as plenty while one of them is nearly
+        /// gone. Not `.credits`, which is the total they would share a name
+        /// with on the card.
+        case planCredits
+        case dedicatedCredits
         case other(seconds: Int)
     }
 
     /// Stable across refreshes, so SwiftUI keeps a row's identity while its
     /// numbers change.
     let id: String
+    /// Provider-reported grant identity, separate from the stable row and any reset date.
+    var cycleID: String?
     let kind: Kind
     /// The model this limit is scoped to, when the provider scopes it to one.
     /// A product name, so it is never translated.
@@ -168,6 +183,19 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
         /// In the allowance's own unit — Qoder's or StepFun's credits.
         let amount: Double
         let at: Date
+        /// Whether `amount` is all the row has left, so the card says those
+        /// credits expire rather than "of which" — a Qoder part whose one pack
+        /// is the whole of it (issue #76). Nil where nobody said: the reading
+        /// is "of which", which is never wrong about the total.
+        var coversRemainder: Bool? = nil
+        /// When the credits lapse on more than one day: how many days, and
+        /// how much in all. Qoder's daily sign-in grant expires thirty days
+        /// after each claim, so a pack row can hold a lot a day for a month,
+        /// and naming only the soonest said 100 of 400 had a deadline when all
+        /// of them did (issue #76). Nil for a single day. `amount` and `at`
+        /// stay the soonest lot's, which is what `--json` reports.
+        var lots: Int? = nil
+        var totalAmount: Double? = nil
 
         /// The soonest parts to lapse: everything ending on the same day as
         /// the first one to, added up. Six packs a day apart are six dates;
@@ -180,11 +208,36 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
             let ahead = parts.filter { $0.at > now && $0.amount > 0 }
             guard let first = ahead.map(\.at).min() else { return nil }
             let sameDay = ahead.filter { calendar.isDate($0.at, inSameDayAs: first) }
-            return .init(amount: sameDay.reduce(0) { $0 + $1.amount }, at: first)
+            var expiry = Expiry(amount: sameDay.reduce(0) { $0 + $1.amount }, at: first)
+            let days = Set(ahead.map { calendar.startOfDay(for: $0.at) })
+            if days.count > 1 {
+                expiry.lots = days.count
+                expiry.totalAmount = ahead.reduce(0) { $0 + $1.amount }
+            }
+            return expiry
         }
     }
 
     var nextExpiry: Expiry?
+
+    /// The allowance in its own unit, as the provider states it, where it
+    /// states one: Qoder's credits (issue #88). Two parts at the same
+    /// percentage can be 6,000 credits and 2,700, and only these say which.
+    /// Drawn on the detailed card behind a setting; never the ring, and never
+    /// a percentage of its own — `usedFraction` stays the one the row shows.
+    struct Amounts: Equatable, Codable, Sendable {
+        let used: Double
+        /// Only as stated: an unstated remainder is not worked out from the
+        /// other two, so a row counted as "left" then shows no amount.
+        let remaining: Double?
+        let limit: Double
+        /// The currency these amounts are written in, where the provider
+        /// states money rather than a count of its own credits. Nil for the
+        /// credit amounts that existed before this field.
+        var currency: String? = nil
+    }
+
+    var amounts: Amounts?
 
     /// A name the reporter gave this limit, used in place of the one built
     /// from `kind`.
@@ -207,9 +260,12 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
         estimate: Estimate? = nil,
         isExhausted: Bool = false,
         nextExpiry: Expiry? = nil,
-        label: String? = nil
+        amounts: Amounts? = nil,
+        label: String? = nil,
+        cycleID: String? = nil
     ) {
         self.id = id
+        self.cycleID = cycleID
         self.kind = kind
         self.scope = scope
         self.usedFraction = usedFraction
@@ -219,6 +275,7 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
         self.estimate = estimate
         self.isExhausted = isExhausted
         self.nextExpiry = nextExpiry
+        self.amounts = amounts
         self.label = label
     }
 
@@ -235,6 +292,7 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
+        cycleID = try container.decodeIfPresent(String.self, forKey: .cycleID)
         kind = try container.decode(Kind.self, forKey: .kind)
         scope = try container.decodeIfPresent(String.self, forKey: .scope)
         usedFraction = try container.decode(Double.self, forKey: .usedFraction)
@@ -243,6 +301,7 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
         reportsLength = try container.decodeIfPresent(Bool.self, forKey: .reportsLength) ?? true
         isExhausted = try container.decodeIfPresent(Bool.self, forKey: .isExhausted) ?? false
         nextExpiry = try container.decodeIfPresent(Expiry.self, forKey: .nextExpiry)
+        amounts = try container.decodeIfPresent(Amounts.self, forKey: .amounts)
         label = try container.decodeIfPresent(String.self, forKey: .label)
 
         if let estimate = try container.decodeIfPresent(Estimate.self, forKey: .estimate) {
@@ -260,6 +319,7 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(cycleID, forKey: .cycleID)
         try container.encode(kind, forKey: .kind)
         try container.encodeIfPresent(scope, forKey: .scope)
         try container.encode(usedFraction, forKey: .usedFraction)
@@ -269,12 +329,13 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
         try container.encodeIfPresent(estimate, forKey: .estimate)
         try container.encode(isExhausted, forKey: .isExhausted)
         try container.encodeIfPresent(nextExpiry, forKey: .nextExpiry)
+        try container.encodeIfPresent(amounts, forKey: .amounts)
         try container.encodeIfPresent(label, forKey: .label)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, scope, usedFraction, windowSeconds, resetsAt
-        case reportsLength, isExhausted, estimate, nextExpiry, label
+        case id, cycleID, kind, scope, usedFraction, windowSeconds, resetsAt
+        case reportsLength, isExhausted, estimate, nextExpiry, amounts, label
         /// Written by 1.0.9 and earlier. Read, never written.
         case isEstimated
     }
@@ -341,6 +402,8 @@ struct UsageWindow: Identifiable, Equatable, Codable, Sendable {
         // and translates as 致谢 — one key cannot be both.
         case .credits: .localized("Credit allowance")
         case .sharedCredits: .localized("Team credits")
+        case .planCredits: .localized("Plan credits")
+        case .dedicatedCredits: .localized("Dedicated credits")
         // Days only when it is a whole number of them: rounded, 36 hours read
         // as a two-day limit. Never below an hour, which is the finest unit
         // anything here states.
@@ -513,6 +576,10 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
         case cursorSignInRequired
         /// There is a login, and the account refused it.
         case cursorLoginExpired
+        /// The editor sealed its token and the keychain did not hand the key
+        /// over — denied, dismissed, or not yet asked. Opening Cursor will
+        /// not help; Refresh asks again.
+        case cursorKeyRefused
         /// Grok Build's CLI has never signed in on this Mac, so there is no
         /// login to borrow. Its own case rather than `.signInRequired`, which
         /// names Codex — the trap the rest of this enum was fixed for once
@@ -548,6 +615,13 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
         /// because the remedy is a specific command and the alternative — an
         /// access key pair — is a different thing to be told about.
         case volcengineCLIMissing
+        /// Antigravity's `agy` CLI is not on this Mac, with *CLI* chosen as
+        /// the route. Automatically its absence is no reason at all: the
+        /// language server's stands (`AntigravityUsageService.weigh`).
+        case antigravityCLIMissing
+        /// `agy` is older than 1.1.11, where `/usage` would be sent to the
+        /// model as a prompt, so it is not asked (`cliMinimumVersion`).
+        case antigravityCLIOutdated
         /// It is installed and has never been signed in, or the session went.
         case volcengineSignInRequired
         /// The key works and the account has no Coding Plan running on it.
@@ -616,6 +690,9 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
         /// There is a key, and the service refused it.
         case apiKeyRefused
         case unreachable
+        /// "System Proxy Only" is on and macOS has no proxy switched on, so
+        /// the request was never sent (`NetworkSession.refuses`).
+        case systemProxyOff
         case unreadableReply
         case rateLimited
         case serverError
@@ -665,6 +742,7 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
             case .antigravityNotAnswering: .localized("Antigravity is open but didn't answer. Restarting it usually helps.")
             case .cursorSignInRequired: .localized("Sign in to Cursor to see usage.")
             case .cursorLoginExpired: .localized("Cursor's saved login was refused. Open Cursor to renew it.")
+            case .cursorKeyRefused: .localized("Pulse needs your keychain to read Cursor's saved login. Refresh to be asked again.")
             case .grokSignInRequired: .localized("Sign in to Grok to see usage.")
             case .grokLoginExpired: .localized("Grok's saved login expired. Use Grok to renew it.")
             case .grokBotNotIncluded: .localized("This Cursor plan doesn't include Grok Bot.")
@@ -683,6 +761,8 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
             case .ollamaSessionExpired: .localized("The Ollama session expired. Sign in again and add it.")
             case .ollamaPageChanged: .localized("Ollama's page has changed and can no longer be read.")
             case .volcengineCLIMissing: .localized("Install arkcli and run `arkcli auth login`, or add access keys in Settings.")
+            case .antigravityCLIMissing: .localized("The agy CLI isn't installed. Install it, or choose another source in Settings.")
+            case .antigravityCLIOutdated: .localized("This version of the agy CLI can't report usage. Update it to 1.1.11 or later.")
             case .volcengineSignInRequired: .localized("arkcli isn't signed in. Run `arkcli auth login`.")
             case .zaiNoCodingPlan: .localized("That key works. The account has no Coding Plan running on it.")
             case .devinAppMissing: .localized("Devin isn't installed.")
@@ -693,6 +773,7 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
             case .apiKeyMissing: .localized("Add an API key in Settings.")
             case .apiKeyRefused: .localized("That key was refused. Check it in Settings.")
             case .unreachable: .localized("The service didn't respond.")
+            case .systemProxyOff: .localized("No proxy is switched on in macOS, so Pulse didn't connect.")
             case .unreadableReply: .localized("Couldn't read the reply.")
             case .rateLimited: .localized("Checking too often — easing off.")
             case .serverError: .localized("The service returned an error.")
@@ -741,6 +822,19 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
     /// money, and it must not compare ¥ against $, so the currency travels
     /// with the amount.
     var creditRemaining: CreditAmount?
+    /// Figures that are not limits, as an extension stated them
+    /// (`UsageMetric`). Empty for every built-in provider. Drawn on the card
+    /// under the limits; never the ring, and never a reading on their own.
+    var metrics: [UsageMetric] = []
+    /// How the provider splits the week between its products, where it says
+    /// (`ProductShare`; Claude Code only). Shown in Settings with a caption,
+    /// never on the rail or the card.
+    var productShare: ProductShare?
+
+    /// What the servers said during the check that produced this reading,
+    /// for the connection diagnostics (`ResponseLog`). Only on a raw reading
+    /// fresh from a check; the table the panel draws from never keeps it.
+    var responses: [ResponseLog.Entry] = []
 
     var origin: UsageRoute?
     /// The account *and organization* the figures belong to, where the route
@@ -770,10 +864,11 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
     ///
     /// The two gateways too: each reading is only as good as the server it was
     /// read from, and the reader can point the account at another one. Qoder
-    /// likewise: its two sites are two accounts, and the site is a setting.
+    /// likewise: its two sites are two accounts, and the site is a setting;
+    /// and StepFun's and MiniMax's.
     var requiresScopeMatch: Bool {
         switch account.provider {
-        case .devin, .sub2api, .newAPI, .qoder, .stepFun: true
+        case .devin, .sub2api, .newAPI, .qoder, .stepFun, .minimax: true
         default: account.provider.profile?.requiresScopeMatch ?? false
         }
     }
@@ -828,14 +923,11 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
             ) + suffix
         }
 
-        /// The currency's narrow symbol, taken from a formatted zero so the
-        /// locale's own choice is used rather than a table of symbols here.
+        /// The currency's symbol as every other amount in Pulse writes it
+        /// (`Money.symbol`), so the ring's short figure and the card's full
+        /// one agree.
         private func symbol(_ locale: Locale) -> String {
-            0.formatted(
-                .currency(code: currency).presentation(.narrow)
-                    .precision(.fractionLength(0)).locale(locale)
-            )
-            .filter { !$0.isNumber && !$0.isWhitespace }
+            Money.symbol(currency, locale: locale)
         }
     }
 
@@ -875,7 +967,14 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
     func current(at now: Date) -> ProviderUsage? {
         if let observedAt, now.timeIntervalSince(observedAt) > UsageCache.maximumAge { return nil }
 
-        let kept = windows.filter { ($0.resetsAt ?? .distantFuture) > now }
+        let kept = windows.filter { window in
+            guard (window.resetsAt ?? .distantFuture) > now else { return false }
+            if account.provider.profile?.expiresWholeBuckets == true, let expiry = window.nextExpiry,
+               expiry.coversRemainder == true, expiry.lots == nil {
+                return expiry.at > now
+            }
+            return true
+        }
         guard !kept.isEmpty || creditBalance != nil else { return nil }
         guard kept.count != windows.count else { return self }
 
@@ -938,5 +1037,24 @@ struct ProviderUsage: Identifiable, Equatable, Sendable {
             plan: nil,
             creditBalance: nil
         )
+    }
+}
+
+extension UsageWindow {
+    /// The longest length a reply may state for a window: ten years.
+    static let longestLength = 10 * 366 * 86_400
+
+    /// `count` units of `unitSeconds` each, or nil when that overflows or runs
+    /// past any plausible window.
+    ///
+    /// **A malformed reply drops the window; it does not stop the app.** Four
+    /// readers multiplied a stated duration by its unit unchecked, and a
+    /// count near `Int.max` — which decodes as an `Int` without complaint —
+    /// trapped, ending the whole process rather than one provider's reading.
+    static func length(_ count: Int, unitSeconds: Int) -> Int? {
+        guard count > 0, unitSeconds > 0 else { return nil }
+        let (seconds, overflow) = count.multipliedReportingOverflow(by: unitSeconds)
+        guard !overflow, seconds <= longestLength else { return nil }
+        return seconds
     }
 }

@@ -22,6 +22,8 @@ The two answers have **different field names** (`used_percent` / `limit_window_s
 
 Never assume a fixed pair. `primary` / `secondary` are not tied to particular durations; which exist depends on the plan — ChatGPT Pro has no 5-hour limit at all, only the tiers below it do. A window’s kind is derived from its duration. The UI renders however many come back.
 
+**A limit has one id on both routes.** The endpoint names a slot `primary_window` / `secondary_window`; the app server says `primary` / `secondary`, and its windows take the endpoint's spelling (`codex.primary_window`). The pinned ring, the alert memory and the reset watch key on that id, so under two spellings a fallback to the app server unpinned the ring and the outer ring went back to the fullest limit (issue #102). `AppSettings.codexPinsNamedLikeHTTP` renames a pin saved under the old app-server spelling when settings load. Group keys match too: `rateLimitsByLimitId` is keyed by the endpoint's `metered_feature`, and the legacy single `rateLimits` is filed under `codex`.
+
 Codex reports `limit_reached` / `allowed` per group plus top-level `rate_limit_reached_type` and `spend_control.reached`. Those flags describe a whole group, which may hold both a 5-hour and a weekly window, so spent is pinned to the fullest window rather than smeared across both.
 
 ## Limit reset credits
@@ -36,6 +38,10 @@ How many one-off credits that clear a rate limit early the account holds. Only `
 ## Plan name
 
 The plan comes back as an internal tier name, not the name on the plan — `prolite` is the 5× Pro tier. `CodexUsageService.planName` maps the ones we know and passes anything else through verbatim rather than blanking it.
+
+## Credit balance
+
+`credits.balance` arrives as a decimal string with ten places (`"2500.0000000000"`), on both routes. `CodexUsageService.creditBalance` shows it as a number in the reader's locale with at most two places — credits, not money, so no currency. A balance that is not a number is passed through; `unlimited: true` is no balance at all.
 
 ## App-server / SIGPIPE / PATH
 
@@ -57,9 +63,9 @@ Locating the executable cannot rely on `PATH`: a GUI app inherits almost none of
 
 ## Proxies
 
-The HTTP endpoint uses Pulse's Network setting: macOS system proxy by default, or the manual HTTP/SOCKS5 proxy. On a machine behind a VPN, following the system is usually what you want (the endpoint may only be reachable through it). A tunnel that stumbles surfaces as a Pulse error, typically `-1005 networkConnectionLost`; transient `URLError`s are retried a couple of times.
+The HTTP endpoint uses Pulse's Network setting: macOS's proxy by default (**Follow System**), macOS's proxy and never a direct connection (**System Proxy Only**), no proxy at all (**No Proxy**), or Pulse's own HTTP/SOCKS5 proxy (**Custom Proxy**). On a machine behind a VPN, following the system is usually what you want (the endpoint may only be reachable through it). A tunnel that stumbles surfaces as a Pulse error, typically `-1005 networkConnectionLost`; transient `URLError`s are retried a couple of times.
 
-`codex app-server` is different: it is a child process rather than a `URLSession`. Manual HTTP starts it with `HTTP_PROXY` / `HTTPS_PROXY`, manual SOCKS5 with `ALL_PROXY`, and both with loopback in `NO_PROXY`. Changing the proxy shuts down a running helper; the next request starts it with the new environment. Follow System injects nothing and preserves the environment Pulse itself inherited. Full boundary: [../networking.md](../networking.md).
+`codex app-server` is different: it is a child process rather than a `URLSession`. Manual HTTP starts it with `HTTP_PROXY` / `HTTPS_PROXY`, manual SOCKS5 with `ALL_PROXY`, and both with loopback in `NO_PROXY`. Changing the proxy shuts down a running helper; the next request starts it with the new environment. Follow System and System Proxy Only inject nothing and preserves the environment Pulse itself inherited; No Proxy removes every proxy variable it would have inherited. Full boundary: [../networking.md](../networking.md).
 
 ## Added accounts
 
@@ -72,6 +78,18 @@ Settings can also show the account’s real lifetime total from `account/usage/r
 ## Ledger
 
 Codex’s `input_tokens` **includes** cached tokens; `cached_input_tokens` is the subset. Session usage is a **running total** — difference it, do not sum per-turn `last_token_usage` (measured 6% high on one long session). Shared ledger rules: [`../refresh-and-data.md`](../refresh-and-data.md).
+
+## Service status
+
+Settings › Codex › **Service status** (`ServiceStatus`, `ServiceStatusGroup`, `StatusPage.of(.codex)`): one row per component of the **Codex** group on status.openai.com — Codex Web, Codex API, CLI, VS Code extension as of 2026-10-04 — each with the state now, a bar a day for 91 days, and the page's uptime figure, drawn the way the page draws them; then a row that opens the page. Requested 2026-10-04, after CodexBar's status rows; the layout is status.claude.com's (bars, then "90 days ago — uptime — Today"), with each page's own colours. Claude Code's twin: [claude-code.md](claude-code.md#service-status).
+
+**The feeds are the page's own, under `/proxy/status.openai.com`.** The page is hosted on incident.io; its Statuspage-compatible `/api/v2/summary.json` has no Codex group at all (checked 2026-10-04: only "Codex in ChatGPT Desktop", under ChatGPT). The proxy summary is what the page is drawn from: `summary.structure.items[].group` holds the groups and their components (`hidden` ones skipped), and `summary.affected_components[]` lists `{component_id, status}` for each one not operational. **Not listed means operational** — that is how the feed says it. States: `degraded_performance`, `partial_outage`, `full_outage` (and Statuspage's `major_outage`), `under_maintenance`; anything else is shown as unrecognised, never as operational. The incident shape comes from CodexBar's parser and tests (MIT), as none has been seen live.
+
+**History: `component_impacts?start_at=…&end_at=…`**, the request the page makes — from the start of the local day 90 days back to the end of today, 91 days. It returns `component_impacts[]` (`component_id`, `status`, `start_at`, `end_at`, null while ongoing) and `component_uptimes[]` (`uptime` as a string, `data_available_since`). **That list also holds each group's own figure, with `status_page_component_group_id` and no `component_id`** — requiring the id dropped the whole history in the app while a fixture trimmed to Codex passed, so entries are decoded one by one and an odd one is skipped, and the fixture keeps every uptime entry. **A day takes the worst impact overlapping it**; a day that ended before `data_available_since` has no record and is drawn faint. Checked 2026-10-04 against the page, all four Codex rows, bar for bar, in UTC+8 — that comparison is `ServiceStatusTests`. The page's **group** row aggregates differently (two days where one component was degraded drew green there), so Pulse draws components only. The uptime is the page's figure, passed through, never computed; without one the line has no figure.
+
+**Colours are the page's** (read off it 2026-10-04): operational `#24C19A`, degraded `#FBBF24`, partial `#F5785C`, full `#F87171`, rounded bars. Maintenance was not on the page; `#60A5FA` is a guess. Hovering a bar names its day and state.
+
+**The pane reads when it opens and every five minutes while it stays open** (`ServiceStatus.checkInterval`); leaving it stops that, and a later read that fails shows "couldn't read" rather than leaving old rows to pass for current. Both feeds at once, through `NetworkSession` like every other request ([../networking.md](../networking.md)). The only background read is the outage notification's, which is off by default, reads the current state alone, and only for a provider switched on ([../notifications.md](../notifications.md)). Shown on every enabled Codex account's pane, since it is about the service; a disabled one fetches nothing. A summary that can't be fetched, doesn't parse, or has no Codex group is **no reading**: the group says it couldn't read the page, rather than leaving rows to read as healthy. A history that fails leaves the current states without bars.
 
 ## First run
 

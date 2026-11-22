@@ -8,6 +8,10 @@
 
 Service: [`../../Sources/Pulse/Providers/DevinUsageService.swift`](../../Sources/Pulse/Providers/DevinUsageService.swift).
 
+## The card's "On this Mac" history
+
+Not the same source as the ring. The history is `.agents([.devinCLI, .devinDesktop], slices: [omp → "devin"])`: the CLI's `sessions.db`, the desktop app's `acp-events` records, **plus a slice of Oh My Pi's store** — the records whose transcripts state `provider: "devin"`. On a Mac whose only Devin usage ran through `omp --model devin/…`, neither client has a store to read and the slice is the card's whole history. The provider is the stated backend, so a model routed to Devin's account under another name (`devin/glm-5-3-flash-1m`) still counts; the slice's view cache and the slice rules are in [../ui/panel-geometry.md](../ui/panel-geometry.md#detailed-card).
+
 Devin is Cognition's agent. Its Mac app is the **former Windsurf editor** — `/Applications/Devin.app` still identifies itself as `com.exafunction.windsurf`, and every key it writes is still named `windsurf.*`. That inheritance is the whole route: it is a VS Code fork, so its global state is an ordinary SQLite file, and the plan it last read from the account is one row in it.
 
 ## Verified against a live account
@@ -119,7 +123,9 @@ The session's `userId` is kept as the credential's `accountID`, and the `last-in
 
 **Read on every pass, never stored.** A saved copy would be a second place for the session to go stale and the one that cannot renew itself; the browser's copy is by definition the current one, and reading it costs about forty milliseconds. Nothing is written to `keys.dat` for this provider unless the reader pastes something.
 
-**Which browser** is the reader's choice, in Settings, defaulting to the one this Mac opens links with and then the rest. Only Chromium browsers are offered: Firefox and Safari keep no `localStorage` LevelDB, so listing them would be a choice that cannot work. **No keychain prompt** — unlike cookies, `localStorage` is not encrypted.
+**Which browser** is the reader's choice, in Settings, defaulting to the one this Mac opens links with and no other (when that is not a Chromium browser, Pulse asks for a choice). Only Chromium browsers are offered: Firefox and Safari keep no `localStorage` LevelDB, so listing them would be a choice that cannot work. **No keychain prompt** — unlike cookies, `localStorage` is not encrypted.
+
+**ego lite is read the same way.** Measured 2026-11-09 on ego lite 0.6.2.9 (bundle id `com.citrolabs.ego.lite`): the same two keys sit under `https://app.devin.ai`, its profile folders are `Profile N` with no `Default`, and the endpoint answered with the fields shown above, except that the percentages arrived as floats (`0.0`, `1.0`) and `hide_daily_quota` was `true`. No `hide_weekly_quota` key was sent; its absence reads as not hidden.
 
 ### Binary storage boundaries
 

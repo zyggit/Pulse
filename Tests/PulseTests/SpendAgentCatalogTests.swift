@@ -135,7 +135,7 @@ struct SpendAgentCatalogTests {
         #expect(SpendAgent.claudeCode.inputs(home: home, environment: [:])
             == [home.appending(path: ".claude/projects")])
         #expect(SpendAgent.codex.inputs(home: home, environment: [:])
-            == [home.appending(path: ".codex/sessions")])
+            == [home.appending(path: ".codex/sessions"), home.appending(path: ".codex/archived_sessions")])
         #expect(SpendAgent.openCode.inputs(home: home, environment: [:])
             == [home.appending(path: ".local/share/opencode/opencode.db")])
         #expect(SpendAgent.kiloCLI.inputs(home: home, environment: [:])
@@ -143,7 +143,7 @@ struct SpendAgentCatalogTests {
         #expect(SpendAgent.grok.inputs(home: home, environment: [:])
             == [home.appending(path: ".grok/sessions")])
         #expect(SpendAgent.kimiCLI.inputs(home: home, environment: [:])
-            == [home.appending(path: ".kimi/sessions")])
+            == [home.appending(path: ".kimi/sessions"), home.appending(path: ".kimi-code/sessions")])
         #expect(SpendAgent.devinCLI.inputs(home: home, environment: [:])
             == [home.appending(path: ".local/share/devin/cli/sessions.db")])
     }

@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import SwiftUI
 
 /// A titled group of settings rows, drawn as one rounded card.
@@ -38,7 +39,9 @@ struct SettingsGroup<Content: View>: View {
 }
 
 /// One line inside a `SettingsGroup`: a label on the left, its control on the
-/// right, and an optional explanation underneath the label.
+/// right, and an optional explanation underneath the label — or, with
+/// `controlBelow`, the control under the label, for a control too wide to
+/// leave the label room beside it.
 struct SettingsRow<Control: View>: View {
     let title: String
     let subtitle: String?
@@ -50,24 +53,69 @@ struct SettingsRow<Control: View>: View {
     /// A resource name rather than a `Provider` because the spend pane draws
     /// clients that are not providers at all; see `SpendAgent.iconResource`.
     let icon: String?
+    /// The account the row stands for, drawn with its own mark — an
+    /// extension's icon included. Takes the place of `icon`.
+    let account: AccountKey?
+    /// An SF Symbol before the title, for a row that stands for no product:
+    /// About's version, updates and links. Drawn in the same 15pt column as
+    /// a mark, so titles line up whichever a row has.
+    let symbol: String?
+    let controlBelow: Bool
     @ViewBuilder let control: Control
 
     init(
         _ title: String,
         subtitle: String? = nil,
         icon: String? = nil,
+        account: AccountKey? = nil,
+        symbol: String? = nil,
+        controlBelow: Bool = false,
         @ViewBuilder control: () -> Control
     ) {
         self.title = title
         self.subtitle = subtitle
         self.icon = icon
+        self.account = account
+        self.symbol = symbol
+        self.controlBelow = controlBelow
         self.control = control()
     }
 
     var body: some View {
+        Group {
+            if controlBelow {
+                VStack(alignment: .leading, spacing: 9) {
+                    label
+                    control
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(alignment: .center, spacing: 16) {
+                    label
+                    Spacer(minLength: 0)
+                    control
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(minHeight: 44)
+    }
+
+    private var label: some View {
         HStack(alignment: .center, spacing: 16) {
-            if let icon {
+            if let account {
+                LobeIconView(account: account, size: 15)
+            } else if let icon {
                 LobeIconView(resource: icon, size: 15)
+            } else if let symbol {
+                // Outline, always: a dark appearance otherwise picked the
+                // filled variant for some symbols and not others.
+                Image(systemName: symbol)
+                    .symbolVariant(.none)
+                    .font(.system(size: 13))
+                    .frame(width: 15, height: 15)
+                    .accessibilityHidden(true)
             }
 
             VStack(alignment: .leading, spacing: 3) {
@@ -81,14 +129,7 @@ struct SettingsRow<Control: View>: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-
-            Spacer(minLength: 0)
-
-            control
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .frame(minHeight: 44)
     }
 }
 

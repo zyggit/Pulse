@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Reads Codex's usage.
@@ -91,7 +92,7 @@ struct CodexUsageService: Sendable {
         // before it becomes an error in the UI.
         for attempt in 0...Self.retryLimit {
             do {
-                let (data, response) = try await NetworkSession.shared.data(for: request)
+                let (data, response) = try await NetworkSession.shared.recordedData(for: request)
                 guard let http = response as? HTTPURLResponse else { return .failed(.unreachable) }
 
                 switch http.statusCode {
@@ -155,7 +156,7 @@ struct CodexUsageService: Sendable {
     }
 
     /// The shape `wham/usage` returns.
-    private static func parseUsageResponse(_ root: [String: Any], for account: AccountKey) -> ProviderUsage {
+    static func parseUsageResponse(_ root: [String: Any], for account: AccountKey) -> ProviderUsage {
         var windows: [UsageWindow] = []
 
         // Account-wide limits, which the server leaves unnamed.
@@ -184,17 +185,13 @@ struct CodexUsageService: Sendable {
             )
         }
 
-        let credits = root["credits"] as? [String: Any]
-
         return ProviderUsage(
             account: account,
             windows: windows,
             observedAt: Date(),
             state: windows.isEmpty ? .unavailable(.noLimitsReported) : .live,
             plan: (root["plan_type"] as? String).map(planName),
-            creditBalance: (credits?["unlimited"] as? Bool == true)
-                ? nil
-                : credits?["balance"] as? String
+            creditBalance: creditBalance(root["credits"] as? [String: Any])
         )
     }
 
@@ -259,7 +256,7 @@ struct CodexUsageService: Sendable {
 
     /// The shape `account/rateLimits/read` returns, which names its fields
     /// differently from the HTTP endpoint.
-    private static func parseAppServerResponse(_ result: [String: Any]) -> ProviderUsage {
+    static func parseAppServerResponse(_ result: [String: Any]) -> ProviderUsage {
         let groups = result["rateLimitsByLimitId"] as? [String: [String: Any]]
             ?? (result["rateLimits"] as? [String: Any]).map { ["codex": $0] }
             ?? [:]
@@ -303,8 +300,13 @@ struct CodexUsageService: Sendable {
                 let minutes = number(node["windowDurationMins"]).map { Int($0) }
                 let resets = number(node["resetsAt"]).map { Date(timeIntervalSince1970: $0) }
 
+                // **Named as the HTTP route names it** (`primary_window`), so a
+                // limit keeps its id when the read falls back here: the pinned
+                // ring, the alert memory and the reset watch all key on it, and
+                // under two spellings a fallback silently unpinned the ring
+                // (issue #102).
                 return UsageWindow(
-                    id: "\(key).\(slot)",
+                    id: "\(key).\(slot)_window",
                     kind: minutes.map { kind(seconds: $0 * 60) } ?? .other(seconds: 0),
                     scope: scope,
                     usedFraction: percent / 100,
@@ -319,9 +321,7 @@ struct CodexUsageService: Sendable {
             windows += ofThisGroup
 
             plan = plan ?? group["planType"] as? String
-            if credits == nil, let node = group["credits"] as? [String: Any] {
-                credits = (node["unlimited"] as? Bool == true) ? nil : node["balance"] as? String
-            }
+            credits = credits ?? creditBalance(group["credits"] as? [String: Any])
         }
 
         return ProviderUsage(
@@ -389,6 +389,20 @@ struct CodexUsageService: Sendable {
         case "edu": "Edu"
         default: raw
         }
+    }
+
+    /// The credit balance as the reader should see it. Codex sends it as a
+    /// decimal string with ten places — `"2500.0000000000"` — which Settings
+    /// printed verbatim. The figure is credits, not money, so it is shown as
+    /// a number in the reader's locale with at most two places. A balance
+    /// that is not a number is passed through rather than blanked; an
+    /// unlimited one is no balance at all.
+    static func creditBalance(_ node: [String: Any]?) -> String? {
+        guard let node, node["unlimited"] as? Bool != true else { return nil }
+        let raw = node["balance"]
+        let value = number(raw) ?? (raw as? String).flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard let value, value.isFinite else { return raw as? String }
+        return value.formatted(.number.precision(.fractionLength(0...2)).locale(LocalizationSource.locale))
     }
 
     private static func number(_ value: Any?) -> Double? {

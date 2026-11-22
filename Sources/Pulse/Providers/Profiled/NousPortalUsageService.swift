@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Nous Portal, Nous Research's subscription for the Hermes inference API: a
@@ -248,10 +249,6 @@ enum NousPortalUsageService {
 
     /// Portal credits are dollars; the portal prices and shows them that way.
     static func money(_ amount: Double) -> String {
-        amount.formatted(
-            .currency(code: "USD")
-                .precision(.fractionLength(2))
-                .locale(LocalizationSource.locale)
-        )
+        amount.formatted(Money.reportedStyle("USD"))
     }
 }

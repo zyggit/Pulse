@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// The last good reading from each provider, so a failed fetch shows numbers
@@ -51,6 +52,12 @@ actor UsageCache {
         /// `CreditAmount.railText` exists to avoid. Optional: entries written
         /// before this field existed simply have none.
         var creditRemaining: CreditAmountStored?
+        /// An extension's figures beside its limits. Optional: entries written
+        /// before this field existed have none.
+        var metrics: [UsageMetric]?
+        /// The week's split by product. Optional: entries written before this
+        /// field existed have none.
+        var productShare: ProductShare?
         var origin: UsageRoute?
         /// The account and organization the provider said these figures belong
         /// to, where it said. Persisted so a failure after a relaunch still
@@ -72,11 +79,13 @@ actor UsageCache {
     /// something, whichever was actually taken later.
     func reconciled(_ result: ProviderUsage) -> ProviderUsage {
         let fetched = result.recordingSoleRoute()
-        // Qoder confirmed there is no allowance, or StepFun that there is no
-        // Step Plan. It supersedes the old figures, including on the next
-        // launch and in the cached JSON export. A failed or unreadable request
-        // still uses the ordinary fallback.
-        if fetched.state == .unavailable(.qoderNoCredits) || fetched.state == .unavailable(.stepFunNoPlan) {
+        // The service confirmed there is no plan or no allowance: Qoder's
+        // credits, StepFun's Step Plan, Z.ai's and Xiaomi's Coding Plan, a
+        // Cursor plan without Grok Bot, a profiled provider's plan. It
+        // supersedes the old figures, including on the next launch and in the
+        // cached JSON export. A failed or unreadable request still uses the
+        // ordinary fallback.
+        if case .unavailable(let reason) = fetched.state, Self.confirmsNoPlan(reason) {
             discard(for: fetched.account)
             return fetched
         }
@@ -155,10 +164,16 @@ actor UsageCache {
         // A gateway with no usable address is the same case: there is no
         // server to have a reading from. So is a Qoder session discarded
         // because the site changed: what is banked is the other site's.
+        // The three shared by every profiled provider belong here too — no
+        // session read, no saved login, no app — or Zed's deleted session and
+        // Gemini's vanished login file showed the last percentage, stale,
+        // instead of asking to sign in.
         if case .unavailable(let reason) = fetched.state,
-           [.apiKeyMissing, .ollamaSessionMissing, .qoderSessionMissing, .stepFunSessionMissing, .signedOut,
-            .claudeDesktopNotSignedIn, .claudeDesktopKeyRefused,
-            .serverAddressMissing, .serverAddressRefused].contains(reason) {
+           [.apiKeyMissing, .ollamaSessionMissing, .qoderSessionMissing, .stepFunSessionMissing,
+            .xiaomiSessionMissing, .signedOut,
+            .claudeDesktopNotSignedIn, .claudeDesktopKeyRefused, .cursorKeyRefused,
+            .serverAddressMissing, .serverAddressRefused,
+            .sessionMissing, .localLoginMissing, .localAppMissing].contains(reason) {
             return fetched
         }
 
@@ -187,6 +202,13 @@ actor UsageCache {
         return cached
     }
 
+    /// A complete answer that there is nothing to show — not a failure, so the
+    /// banked figures are not a newer version of it.
+    static func confirmsNoPlan(_ reason: ProviderUsage.Unavailability) -> Bool {
+        [.qoderNoCredits, .stepFunNoPlan, .zaiNoCodingPlan, .xiaomiNoCodingPlan,
+         .grokBotNotIncluded, .noPlan].contains(reason)
+    }
+
     /// Whether `b`'s figures may stand in for `a`'s — a fallback, a newer
     /// reading, or a banked save.
     ///
@@ -200,6 +222,12 @@ actor UsageCache {
     private static func mayStandIn(for a: ProviderUsage, _ b: ProviderUsage) -> Bool {
         guard a.requiresScopeMatch else { return true }
         return UsageScope.match(a.sourceScope, b.sourceScope)
+    }
+
+    /// Drops an account's kept reading: its site changed, and the reading is
+    /// another account's (`UsageStore.settingsChanged`).
+    func forget(_ account: AccountKey) {
+        discard(for: account)
     }
 
     private func discard(for account: AccountKey) {
@@ -219,6 +247,8 @@ actor UsageCache {
             creditRemaining: usage.creditRemaining.map {
                 CreditAmountStored(amount: $0.amount, currency: $0.currency)
             },
+            metrics: usage.metrics.isEmpty ? nil : usage.metrics,
+            productShare: usage.productShare,
             origin: usage.origin,
             scope: usage.sourceScope
         )
@@ -250,6 +280,8 @@ actor UsageCache {
         restored.creditRemaining = stored.creditRemaining.map {
             .init(amount: $0.amount, currency: $0.currency)
         }
+        restored.metrics = stored.metrics ?? []
+        restored.productShare = stored.productShare
         restored.origin = stored.origin
         restored.sourceScope = stored.scope
         restored.isCached = true

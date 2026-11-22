@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import SwiftUI
 
 /// Layout constants for the collapsed dock rail. Shared with
@@ -20,7 +21,7 @@ enum DockLayout {
     /// further in than the centre of the end's circle, which is itself
     /// `flareHeight + cornerRadius` in. 54pt at standard size — the rail is
     /// 16pt longer that way, which is why this setting goes through
-    /// `onChange?()` like the other rail metrics.
+    /// `onLayoutChange?()` like the other rail metrics.
     static var verticalPadding: CGFloat {
         guard PanelMetrics.usesRoundEnds else { return 46 * PanelMetrics.scale }
         return flareHeight + cornerRadius - ringDiameter / 2 + endRingOffset
@@ -46,7 +47,18 @@ enum DockLayout {
     static var ringDiameter: CGFloat { 36 * PanelMetrics.scale }
     static var ringLineWidth: CGFloat { 4 * PanelMetrics.scale }
     /// Gap between a ring and the percent label beneath it.
-    static var ringToTextSpacing: CGFloat { 6 * PanelMetrics.scale }
+    ///
+    /// Further with the time-until-reset arc on: it is drawn 5pt outside the
+    /// ring's edge (`UsageRingView.clockGap` + its stroke), and a figure at
+    /// the usual 6pt sat on it — under the ring, beside it, across or down a
+    /// side (issue #73). The extra keeps the same clear gap from the arc as
+    /// from a ring without one.
+    static var ringToTextSpacing: CGFloat { 6 * PanelMetrics.scale + clockReach }
+
+    /// How much further the time-until-reset arc stands out than the ring it
+    /// circles: 5pt at standard size while it is on, nothing while it is off.
+    /// Measured from `UsageRingView.clockDiameter` and the clock's stroke.
+    static var clockReach: CGFloat { PanelMetrics.showsWindowClock ? 5 * PanelMetrics.scale : 0 }
     static var percentFontSize: CGFloat { 13 * PanelMetrics.scale }
     /// Rendered line height of the percent label, and its width at "100%".
     ///
@@ -82,8 +94,12 @@ enum DockLayout {
     /// arc wants. So when this is on the mark moves inward and the disc gives
     /// up two points; the ring itself, the rail's width and the ring centres
     /// are all unchanged, so nothing outside this circle notices.
-    static var secondRingDiameter: CGFloat { 26 * PanelMetrics.scale }
-    static var secondRingLineWidth: CGFloat { 2.5 * PanelMetrics.scale }
+    ///
+    /// As thick as the first ring and 1pt inside it, so the two tracks read
+    /// as one band rather than as grooves of different widths.
+    static var secondRingDiameter: CGFloat { ringDiameter - (ringLineWidth + secondRingGap) * 2 }
+    static var secondRingLineWidth: CGFloat { ringLineWidth }
+    static var secondRingGap: CGFloat { 1 * PanelMetrics.scale }
 
     /// Reach of the two convex corners on the rail's inner side.
     ///
@@ -187,9 +203,48 @@ enum DockLayout {
     /// 1.1pt at small / standard / large — so a top rail was built about a
     /// point short per ring, the stack was squeezed, and the only thing in an
     /// item that can compress is the text: every label rendered as "10…".
-    static func itemLength(on axis: PanelEdge.Axis) -> CGFloat {
+    static func itemLength(on axis: PanelEdge.Axis, docked: Bool = true) -> CGFloat {
         guard showsPercentages(on: axis) else { return ringDiameter }
+        if labelsBeside(on: axis, docked: docked) { return ringDiameter + ringToTextSpacing + percentTextWidth }
         return axis == .vertical ? itemHeight : max(ringDiameter, percentTextWidth)
+    }
+
+    /// A rail lying across and standing free, with labels on — which is
+    /// laid out in one of two proportions of its own, never the top dock's.
+    ///
+    /// The top dock's proportion on a free pill — labels stacked, 10pt above
+    /// and below, the upright rail's 30pt between rings — read as cramped top
+    /// to bottom and scattered side to side: a row of loose icons rather than
+    /// one rail. Docked to the top it keeps that proportion; it hangs from the
+    /// menu bar rather than floating as a pill.
+    static func freeAcrossWithLabels(on axis: PanelEdge.Axis, docked: Bool) -> Bool {
+        axis == .horizontal && !docked && showsPercentages(on: .horizontal)
+    }
+
+    /// The free lying rail's labels **beside** their rings
+    /// (`AppSettings.freeAcrossFiguresBeside`): the rail is the upright one's
+    /// thickness and reads as the same object turned over, but longer.
+    static func labelsBeside(on axis: PanelEdge.Axis, docked: Bool) -> Bool {
+        freeAcrossWithLabels(on: axis, docked: docked) && PanelMetrics.freeAcrossFiguresBeside
+    }
+
+    /// The free lying rail's labels **under** their rings, the default: the
+    /// rings closer together and more room above and below than the top dock.
+    static func labelsStackedFree(on axis: PanelEdge.Axis, docked: Bool) -> Bool {
+        freeAcrossWithLabels(on: axis, docked: docked) && !PanelMetrics.freeAcrossFiguresBeside
+    }
+
+    /// The gap between items along the rail. Tighter on a free lying rail,
+    /// whose items already sit apart by their labels' width.
+    static func gap(on axis: PanelEdge.Axis, docked: Bool = true) -> CGFloat {
+        if labelsBeside(on: axis, docked: docked) { return 18 * PanelMetrics.scale * PanelMetrics.spacing }
+        if labelsStackedFree(on: axis, docked: docked) { return 20 * PanelMetrics.scale * PanelMetrics.spacing }
+        return itemSpacing
+    }
+
+    /// The room either side of the items **across** the rail.
+    static func crossPadding(on axis: PanelEdge.Axis, docked: Bool = true) -> CGFloat {
+        labelsStackedFree(on: axis, docked: docked) ? 14 * PanelMetrics.scale : horizontalPadding
     }
 
     /// The rail's extent **across** its run: its width down a side, its height
@@ -203,9 +258,34 @@ enum DockLayout {
     /// and its corners share that measurement (`cornerRadius + flareWidth <=
     /// width`), so narrowing the rail when the labels go would fold the shape
     /// in on itself. Only the rail's *length* changes there.
-    static func thickness(on axis: PanelEdge.Axis) -> CGFloat {
-        guard axis == .horizontal, showsPercentages(on: .horizontal) else { return width }
-        return itemHeight + horizontalPadding * 2
+    static func thickness(on axis: PanelEdge.Axis, docked: Bool = true) -> CGFloat {
+        guard axis == .horizontal, showsPercentages(on: .horizontal),
+              !labelsBeside(on: axis, docked: docked) else { return width }
+        let insets = crossInsets(on: axis, docked: docked)
+        return itemHeight + insets.leading + insets.trailing
+    }
+
+    /// The padding either side of the items across the rail — top and bottom
+    /// lying across, left and right down a side.
+    ///
+    /// **The ring's side gets 10pt more while the time-until-reset arc is
+    /// on**, when the rail lies across with its figures stacked over or under
+    /// the rings. The arc stands 5pt further out than the ring, and with
+    /// figures above the rings at the top dock it sat 3pt off the rail's
+    /// bottom edge, under a notch's whole housing of black (issue #78). Its
+    /// own reach alone (5pt) was tried first and still read cramped; 10 was
+    /// picked by eye on the bundled app, which leaves 5pt more past the arc
+    /// than a ring without one has. The figures' side is left as it was: the
+    /// gap between a ring and its figure already allows for the arc
+    /// (`ringToTextSpacing`). Down a side, and with figures beside or off, the
+    /// rail is far wider than a ring and its arc, so nothing is added.
+    static func crossInsets(on axis: PanelEdge.Axis,
+                            docked: Bool = true) -> (leading: CGFloat, trailing: CGFloat) {
+        let padding = crossPadding(on: axis, docked: docked)
+        guard axis == .horizontal, showsPercentages(on: .horizontal),
+              !labelsBeside(on: axis, docked: docked) else { return (padding, padding) }
+        let extra = PanelMetrics.showsWindowClock ? 10 * PanelMetrics.scale : 0
+        return labelLeads ? (padding, padding + extra) : (padding + extra, padding)
     }
 
     /// Rail length for a given number of providers: the padding at each end +
@@ -213,13 +293,14 @@ enum DockLayout {
     /// settings, so this is not a constant.
     static func length(for itemCount: Int, on axis: PanelEdge.Axis, docked: Bool = true) -> CGFloat {
         let count = CGFloat(max(itemCount, 1))
-        return endPadding(docked: docked) * 2 + itemLength(on: axis) * count + itemSpacing * (count - 1)
+        return endPadding(docked: docked) * 2 + itemLength(on: axis, docked: docked) * count
+            + gap(on: axis, docked: docked) * (count - 1)
     }
 
     /// The rail's full size, laid the way `edge` lays it.
     static func size(for itemCount: Int, on axis: PanelEdge.Axis, docked: Bool = true) -> CGSize {
         let along = length(for: itemCount, on: axis, docked: docked)
-        let across = thickness(on: axis)
+        let across = thickness(on: axis, docked: docked)
         return axis == .vertical
             ? CGSize(width: across, height: along)
             : CGSize(width: along, height: across)
@@ -231,12 +312,15 @@ enum DockLayout {
     /// depends on whether it carries a label — so this is not simply half the
     /// rail. Down a side only the ring is ever as wide as this, the label being
     /// narrower; across the top the label is stacked under the ring and counts.
-    static func ringCentreAcross(on axis: PanelEdge.Axis) -> CGFloat {
+    static func ringCentreAcross(on axis: PanelEdge.Axis, docked: Bool = true) -> CGFloat {
+        if labelsBeside(on: axis, docked: docked) { return thickness(on: axis, docked: docked) / 2 }
         let item = axis == .vertical
             ? ringDiameter
             : (showsPercentages(on: axis) ? itemHeight : ringDiameter)
-        let lead = axis == .horizontal ? ringOffsetInItem(on: axis) : 0
-        return (thickness(on: axis) - item) / 2 + lead + ringDiameter / 2
+        guard axis == .horizontal, showsPercentages(on: axis) else {
+            return (thickness(on: axis, docked: docked) - item) / 2 + ringDiameter / 2
+        }
+        return crossInsets(on: axis, docked: docked).leading + ringOffsetInItem(on: axis) + ringDiameter / 2
     }
 
     /// How far along the rail the first ring's centre sits, and the step from
@@ -249,20 +333,31 @@ enum DockLayout {
         // stack runs the other way and the ring is simply centred in the
         // item's width — which is *not* half a ring once the item is as wide
         // as the label, and the label is the wider of the two.
-        let intoItem = axis == .vertical
-            ? ringOffsetInItem(on: axis) + ringDiameter / 2
-            : itemLength(on: axis) / 2
+        // Beside, the ring leads its item — or follows the label, when the
+        // label is set to come first.
+        // Beside, the ring leads its item: the setting that put the figure
+        // there says *right* of the ring, so "above" does not move it left.
+        let intoItem = if labelsBeside(on: axis, docked: docked) {
+            ringDiameter / 2
+        } else if axis == .vertical {
+            ringOffsetInItem(on: axis) + ringDiameter / 2
+        } else {
+            itemLength(on: axis) / 2
+        }
         return endPadding(docked: docked) + intoItem
     }
-    static func ringStep(on axis: PanelEdge.Axis) -> CGFloat {
-        itemLength(on: axis) + itemSpacing
+    static func ringStep(on axis: PanelEdge.Axis, docked: Bool = true) -> CGFloat {
+        itemLength(on: axis, docked: docked) + gap(on: axis, docked: docked)
     }
 
     /// Rail length with every provider switched on, which is what the panel
     /// has to leave room for. Measured docked, which is the longer of the two —
     /// the window never needs to shrink, only the rail drawn inside it.
+    /// Lying across, a free rail with its labels beside the rings is the
+    /// longer one, so the window is budgeted for whichever is longer — the
+    /// window may grow, never the rail outgrow it.
     static func maximumLength(on axis: PanelEdge.Axis, capacity: Int = PanelMetrics.railCapacity) -> CGFloat {
-        length(for: capacity, on: axis, docked: true)
+        max(length(for: capacity, on: axis, docked: true), length(for: capacity, on: axis, docked: false))
     }
 
     /// Kept for the vertical rail, which is what every existing caller means.
@@ -317,16 +412,6 @@ struct RailEntry: Identifiable, Equatable {
     var isRefreshing: Bool = false
     /// A colour chosen for this ring, or nil to colour it by usage.
     var tint: Color?
-    /// Whether this ring draws the animated mark instead of the logo.
-    var showsBotMark: Bool = false
-    /// The persona chosen for this ring, or nil to let the rail deal one.
-    var botPersona: BotMarkPersona?
-    /// The shape this ring's mark wears.
-    var botBody: BotMarkBody = .default
-    /// Something that just happened to this account and is worth a one-shot.
-    var botEvent: BotMarkEvent?
-    /// A colour chosen for this ring's mark, or nil for its brand colour.
-    var botColour: Color?
     /// Which ring this is. An unsplit account's slot keeps the account's own
     /// id, so nothing stored before slots existed stops matching.
     var slot: RailSlot
@@ -352,6 +437,8 @@ struct RailEntry: Identifiable, Equatable {
     /// together. Carried on the entry like the tint, because the item is built
     /// from this and doesn't otherwise see the settings.
     var showsRemaining: Bool = false
+    /// The robot in place of the provider's mark, or nil for the mark.
+    var robot: RobotCue?
 
     var id: String { slot.id }
 }
@@ -365,12 +452,6 @@ struct RailEntry: Identifiable, Equatable {
 /// animated, with the rings fading in once it has opened enough to hold them.
 struct UsageDockView: View {
     let entries: [RailEntry]
-    /// Where the pointer is in the panel's coordinates, or nil when it is off
-    /// the panel. The marks' eyes follow it.
-    var pointer: CGPoint?
-    /// Whether no CLI has written for a while; only the sleepy persona uses
-    /// this to add a night-time doze.
-    var isQuiet = false
     let selectedSlot: String?
     let edge: PanelEdge
     /// Fused to a screen edge, or standing free on the desktop. Only the
@@ -380,6 +461,21 @@ struct UsageDockView: View {
     /// Open, or wound down to the sliver.
     var isExpanded: Bool = true
     var notchSize: CGSize?
+    /// How far the rail is drawn off its edge while it is pulled away or drawn
+    /// on, and how thin the neck is on the way on (`DropletTether`).
+    var pull: CGFloat = 0
+    var thinning: CGFloat = 0
+    /// How far a parted neck's pieces have drawn back (`DropletTether`).
+    var parted: CGFloat = 0
+    /// How hard the hand is pulling, 0 to 1, which thins the neck as well as
+    /// how far the rail has got: on a quick pull the rail trails the hand.
+    var tension: CGFloat = 0
+    /// How much a rail that has just let go of an edge still has its docked
+    /// corners (`DockBerthShape.fusion`).
+    var fusion: CGFloat = 0
+    /// How fast the rail is being carried, in points a second, for the
+    /// stretch a quick throw gives it.
+    var motion: CGVector = .zero
     /// Colours the sliver when a limit is close enough that hiding the rail
     /// would be hiding something worth seeing.
     var alert: Color?
@@ -399,6 +495,39 @@ struct UsageDockView: View {
     var onOpen: () -> Void = {}
 
     private var railSize: CGSize { DockLayout.size(for: entries.count, on: edge.axis, docked: isDocked) }
+
+    /// The pull while it can be seen: docked, open, and not past the edge.
+    private var shownPull: CGFloat { isDocked && isExpanded ? max(pull, 0) : 0 }
+
+    /// How much a throw at `motion` stretches the surface: up to 14% at
+    /// 2600pt a second along the way it is going, and 35% of that thinner
+    /// across. The figures are codenotch's, which the user liked.
+    private var stretch: (scale: CGSize, anchor: UnitPoint) {
+        // **Docked, only along the edge.** Stretched across it, the neck and
+        // its foot were pushed off the edge they are joined to.
+        let motion = isDocked
+            ? (edge.isVertical ? CGVector(dx: 0, dy: motion.dy) : CGVector(dx: motion.dx, dy: 0))
+            : motion
+        let speed = hypot(motion.dx, motion.dy)
+        let amount = min(speed / 2600, 1) * 0.14
+        guard amount > 0.001 else { return (CGSize(width: 1, height: 1), .center) }
+        // Screen coordinates run up; SwiftUI's run down.
+        if abs(motion.dx) >= abs(motion.dy) {
+            return (CGSize(width: 1 + amount, height: 1 - 0.35 * amount), motion.dx > 0 ? .trailing : .leading)
+        }
+        return (CGSize(width: 1 - 0.35 * amount, height: 1 + amount), motion.dy > 0 ? .top : .bottom)
+    }
+
+    /// The pull as a move into the panel, away from the edge.
+    private var pullOffset: CGSize {
+        let p = shownPull
+        return switch edge {
+        case .right: CGSize(width: -p, height: 0)
+        case .left: CGSize(width: p, height: 0)
+        case .top: CGSize(width: 0, height: p)
+        case .bottom: CGSize(width: 0, height: -p)
+        }
+    }
     private var currentSize: CGSize {
         isExpanded ? railSize : DockLayout.collapsedSize(on: edge.axis)
     }
@@ -408,8 +537,16 @@ struct UsageDockView: View {
         // moves as it opens and closes.
         ZStack(alignment: edge.stackAlignment) {
             berth
+                // A quick throw draws the surface out behind the rings, the
+                // front staying with the hand, and thins it a little.
+                .scaleEffect(stretch.scale, anchor: stretch.anchor)
 
             rings
+                // Carried with the body as it is pulled off the edge. Never
+                // past the edge: a spring settling back overshoots below zero.
+                .offset(pullOffset)
+                // Still in the tree while collapsed, so nothing moves as it
+                // opens; but nothing in it may animate for nobody.
                 .opacity(isExpanded ? 1 : 0)
                 // Its own timing, overriding the spring the shape rides on:
                 // the contents appear once the berth has opened enough to hold
@@ -445,8 +582,10 @@ struct UsageDockView: View {
         if let notchSize {
             let surface = PanelHitArea.notchSurface(rail: CGRect(origin: .zero, size: railSize), notchSize: notchSize)
             PanelSurface(
-                shape: NotchBerthShape(notchSize: notchSize, openness: isExpanded ? 1 : 0),
-                usesGlass: usesGlass
+                shape: NotchBerthShape(notchSize: notchSize, openness: isExpanded ? 1 : 0,
+                                       pull: shownPull, thinning: max(thinning, tension), parted: parted),
+                usesGlass: usesGlass,
+                screenEdge: .top
             )
             .overlay {
                 // The hardware housing replaces the ordinary collapsed
@@ -470,14 +609,16 @@ struct UsageDockView: View {
     }
 
     private var ordinaryBerth: some View {
-        let shape = DockBerthShape(edge: edge, isDocked: isDocked, openness: isExpanded ? 1 : 0)
+        let shape = DockBerthShape(edge: edge, isDocked: isDocked, openness: isExpanded ? 1 : 0,
+                                   pull: shownPull, thinning: max(thinning, tension), parted: parted, fusion: fusion)
 
         return PanelSurface(
             shape: shape,
             usesGlass: usesGlass,
             // Only the sliver carries the alert colour: expanded, the rings
             // already say which limit is where.
-            tint: isExpanded ? nil : alert
+            tint: isExpanded ? nil : alert,
+            screenEdge: isDocked ? edge.screenSide : []
         )
             .frame(width: currentSize.width, height: currentSize.height)
             .overlay(alignment: edge.stackAlignment) {
@@ -501,42 +642,19 @@ struct UsageDockView: View {
         // keeps them one set of views across the change rather than two sets
         // swapped, so a rail that is re-docked from a side to the top carries
         // its rings round with it instead of rebuilding them.
+        let spacing = DockLayout.gap(on: edge.axis, docked: isDocked)
         let stack = edge.isVertical
-            ? AnyLayout(VStackLayout(spacing: DockLayout.itemSpacing))
-            : AnyLayout(HStackLayout(spacing: DockLayout.itemSpacing))
-
-        // Dealt here because this is the one place that knows the order the
-        // rings are actually in — the rail shows enabled accounts, so who sits
-        // next to whom is not knowable from `Provider.allCases`.
-        // Only when something is actually drawing a mark: the deal tries
-        // forty stride-and-rotation combinations, which is cheap but not free,
-        // and a rail of logos has no use for the answer.
-        let botTints = entries.contains(where: \.showsBotMark)
-            ? BotMarkTint.deal(over: entries.map(\.usage.provider),
-                               chosen: entries.map(\.botColour))
-            : []
-        // Dealt by position so the ring beside this one is a different
-        // character; a chosen persona simply wins over the deal.
-        let personas = entries.enumerated().map { index, entry in
-            entry.botPersona ?? BotMarkPersona.automatic(at: index)
-        }
-        // Everything worth looking at is away from the edge the rail is on.
-        let gaze = BotMarkGaze(edge: edge)
+            ? AnyLayout(VStackLayout(spacing: spacing))
+            : AnyLayout(HStackLayout(spacing: spacing))
 
         return stack {
-            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+            ForEach(entries) { entry in
                 UsageDockItem(
                     entry: entry,
-                    botTint: index < botTints.count ? botTints[index] : .clear,
-                    botPersona: personas[index],
-                    botBody: entry.botBody,
-                    botGaze: gaze,
-                    botEvent: entry.botEvent,
-                    pointer: pointer,
-                    isQuiet: isQuiet,
                     isSelected: selectedSlot == entry.slot.id,
                     isInteractive: isExpanded,
                     showsPercentage: DockLayout.showsPercentages(on: edge.axis),
+                    labelBeside: DockLayout.labelsBeside(on: edge.axis, docked: isDocked),
                     animatesActivity: animatesActivity,
                     onEnter: { onEnter(entry) },
                     onRefresh: { onRefresh(entry.slot.account) }
@@ -550,7 +668,7 @@ struct UsageDockView: View {
                 // It reached 12.6pt at eleven rings, which is a third of a
                 // ring, purely from a label rendering narrower than its budget.
                 .frame(
-                    width: edge.isVertical ? nil : DockLayout.itemLength(on: .horizontal),
+                    width: edge.isVertical ? nil : DockLayout.itemLength(on: .horizontal, docked: isDocked),
                     height: edge.isVertical ? DockLayout.itemLength(on: .vertical) : nil
                 )
             }
@@ -559,27 +677,14 @@ struct UsageDockView: View {
         // the flare needs room inside, and the flare is at the rail's ends
         // whichever way it is lying.
         .padding(edge.isVertical ? .vertical : .horizontal, DockLayout.endPadding(docked: isDocked))
-        .padding(edge.isVertical ? .horizontal : .vertical, DockLayout.horizontalPadding)
+        .padding(edge.isVertical ? .leading : .top, DockLayout.crossInsets(on: edge.axis, docked: isDocked).leading)
+        .padding(edge.isVertical ? .trailing : .bottom, DockLayout.crossInsets(on: edge.axis, docked: isDocked).trailing)
         .frame(width: railSize.width, height: railSize.height)
     }
 }
 
 private struct UsageDockItem: View {
     let entry: RailEntry
-    /// The body colour for this ring's animated mark, dealt across the rail.
-    let botTint: Color
-    /// The character this ring's mark plays.
-    let botPersona: BotMarkPersona
-    /// The shape it wears.
-    let botBody: BotMarkBody
-    /// Which way it looks.
-    let botGaze: BotMarkGaze
-    /// A one-shot for something that just happened.
-    let botEvent: BotMarkEvent?
-    /// The pointer in panel coordinates, for this ring's mark to look at.
-    let pointer: CGPoint?
-    /// Whether the machine has been quiet for a while.
-    let isQuiet: Bool
     let isSelected: Bool
     /// False while the rail is collapsed. The rings are still in the view
     /// tree then, only invisible — and an invisible ring with a live tracking
@@ -588,6 +693,8 @@ private struct UsageDockItem: View {
     /// False for a rail lying across the top with the labels switched off,
     /// which is the default there — see `AppSettings.topRailShowsPercentages`.
     var showsPercentage: Bool = true
+    /// The label beside the ring rather than under it (`DockLayout.labelsBeside`).
+    var labelBeside: Bool = false
     /// Whether this ring turns while its CLI is working or being refreshed.
     var animatesActivity: Bool = true
     let onEnter: () -> Void
@@ -600,12 +707,17 @@ private struct UsageDockItem: View {
         // The label goes above or below on a setting. `ringOffsetInItem` is
         // the same swap expressed as a number, and the hit testing runs on
         // that — the two must not be allowed to disagree.
-        VStack(spacing: DockLayout.ringToTextSpacing) {
-            if DockLayout.labelLeads { percentLabel }
+        let layout = labelBeside
+            ? AnyLayout(HStackLayout(spacing: DockLayout.ringToTextSpacing))
+            : AnyLayout(VStackLayout(spacing: DockLayout.ringToTextSpacing))
+        layout {
+            if DockLayout.labelLeads && !labelBeside { sizedLabel }
 
             ring
 
-            if !DockLayout.labelLeads { percentLabel }
+            // Beside, always after the ring: the switch that put it there
+            // says *right* of the ring (issue #73).
+            if !DockLayout.labelLeads || labelBeside { sizedLabel }
         }
         .contentShape(.rect)
         .background {
@@ -639,20 +751,27 @@ private struct UsageDockItem: View {
             isBusy: entry.isRunning,
             isRefreshing: entry.isRefreshing,
             animatesActivity: animatesActivity,
-            showsBotMark: entry.showsBotMark,
-            botTint: botTint,
-            botPersona: botPersona,
-            botBody: botBody,
-            botGaze: botGaze,
-            botEvent: botEvent,
-            botPointer: pointer,
-            botQuiet: isQuiet,
             highlight: isSelected,
             windowClockFraction: entry.windowClock,
             secondFraction: entry.second?.usedFraction,
-            secondIsSpent: UsageTint.isSpent(entry.second)
+            secondIsSpent: UsageTint.isSpent(entry.second),
+            robot: entry.robot,
+            isLive: isInteractive,
+            account: usage.account
         )
         .scaleEffect(isSelected ? 1.06 : 1)
+    }
+
+    /// Beside its ring the label takes exactly its budgeted width, held
+    /// against the ring, so a short "0%" does not slide the ring along —
+    /// the hit testing steps in budgeted units (`DockLayout.firstRingAlong`).
+    @ViewBuilder
+    private var sizedLabel: some View {
+        if labelBeside {
+            percentLabel.frame(width: DockLayout.percentTextWidth, alignment: .leading)
+        } else {
+            percentLabel
+        }
     }
 
     /// An em dash rather than 0% when nothing is known: a zero would read as
@@ -742,12 +861,29 @@ struct DockBerthShape: Shape {
     /// width, leaving exactly the rounded-on-one-side sliver.
     var openness: CGFloat = 1
 
+    /// How far a docked rail is drawn off its edge while it is being pulled
+    /// away or drawn onto it; the gap is the liquid neck
+    /// (`DropletTether`). Drawn outside the frame, into the panel.
+    var pull: CGFloat = 0
+    /// Extra thinning of that neck while the rail is being drawn on.
+    var thinning: CGFloat = 0
+    /// The neck's two pieces drawing back after it has parted, 0 to 1.
+    var parted: CGFloat = 0
+    /// Standing free, how much it still has the docked rail's corners: 1 the
+    /// moment it lets go of an edge, easing to 0, the capsule. So the outline
+    /// rounds off rather than being swapped for another in one frame.
+    var fusion: CGFloat = 0
+
     /// Lets the outline itself be interpolated, so the silhouette is redrawn
     /// at every step of the animation instead of one shape being faded into
     /// another.
-    var animatableData: CGFloat {
-        get { openness }
-        set { openness = newValue }
+    var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
+        get { AnimatablePair(openness, AnimatablePair(pull, thinning)) }
+        set {
+            openness = newValue.first
+            pull = newValue.second.first
+            thinning = newValue.second.second
+        }
     }
 
     private var flareHeight: CGFloat { DockLayout.flareHeight * openness }
@@ -759,6 +895,8 @@ struct DockBerthShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         guard isDocked else { return floating(in: rect) }
+        let pulled = pull * min(max(openness, 0), 1)
+        if pulled > 0.01 { return tethered(in: rect, pull: pulled) }
 
         switch edge {
         case .right:
@@ -767,6 +905,15 @@ struct DockBerthShape: Shape {
         case .left:
             return facingRight(in: rect).applying(
                 CGAffineTransform(translationX: rect.width, y: 0).scaledBy(x: -1, y: 1)
+            )
+
+        case .bottom:
+            // A quarter turn clockwise, which carries the flare from the
+            // right-hand edge to the bottom one — the top dock's drawing
+            // turned the other way, so the winding is preserved here too.
+            let canonical = CGRect(x: 0, y: 0, width: rect.height, height: rect.width)
+            return facingRight(in: canonical).applying(
+                CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: rect.width, ty: 0)
             )
 
         case .top:
@@ -792,7 +939,9 @@ struct DockBerthShape: Shape {
     /// `AppSettings.usesRoundEnds` is on they are the docked rail's ends too,
     /// less the flare.
     private func floating(in rect: CGRect) -> Path {
-        let radius = min(rect.width, rect.height) / 2
+        let capsule = min(rect.width, rect.height) / 2
+        let docked = min(DockLayout.cornerRadius, capsule)
+        let radius = capsule + (docked - capsule) * min(max(fusion, 0), 1)
         return Path(
             roundedRect: rect,
             cornerSize: CGSize(width: radius, height: radius),
@@ -811,37 +960,43 @@ struct DockBerthShape: Shape {
         // and the path would fold in on itself.
         let fw = max(min(flareWidth, w - r), 0)
 
-        // Pulls each fillet's control points off its endpoints. 0.55 is the
-        // usual circular-arc approximation; it keeps the sweep full instead
-        // of flattening it into a sliver.
-        let k: CGFloat = 0.55
-
         var path = Path()
 
         // Body's flat top edge, left to right.
         path.move(to: CGPoint(x: r, y: f))
         path.addLine(to: CGPoint(x: w - fw, y: f))
 
-        // Concave fillet sweeping up into the screen edge.
-        path.addCurve(
-            to: CGPoint(x: w, y: 0),
-            control1: CGPoint(x: w - fw * (1 - k), y: f),
-            control2: CGPoint(x: w, y: f * k)
-        )
+        // Concave fillet sweeping up into the screen edge: a turn whose
+        // curvature eases in and out, so neither end reads as a corner
+        // (`DropletTether.fluidTurn`).
+        path.addLines([CGPoint(x: w - fw, y: f)] + DropletTether.fluidTurn(
+            from: CGPoint(x: w - fw, y: f), along: CGVector(dx: 1, dy: 0),
+            to: CGPoint(x: w, y: 0), then: CGVector(dx: 0, dy: -1)
+        ))
 
         // Flush against the screen for the full height.
         path.addLine(to: CGPoint(x: w, y: h))
 
         // Mirrored fillet back down into the body's bottom edge.
-        path.addCurve(
-            to: CGPoint(x: w - fw, y: h - f),
-            control1: CGPoint(x: w, y: h - f * k),
-            control2: CGPoint(x: w - fw * (1 - k), y: h - f)
-        )
+        for point in DropletTether.fluidTurn(
+            from: CGPoint(x: w, y: h), along: CGVector(dx: 0, dy: -1),
+            to: CGPoint(x: w - fw, y: h - f), then: CGVector(dx: -1, dy: 0)
+        ) {
+            path.addLine(to: point)
+        }
 
         // Body's flat bottom edge, right to left.
         path.addLine(to: CGPoint(x: r, y: h - f))
 
+        appendFarEnd(to: &path, width: w, height: h, flare: f, radius: r)
+
+        path.closeSubpath()
+        return path
+    }
+
+    /// The body's two corners away from the edge and the side between them,
+    /// from the bottom edge round to the top one.
+    private func appendFarEnd(to path: inout Path, width w: CGFloat, height h: CGFloat, flare f: CGFloat, radius r: CGFloat) {
         // The two convex corners. Round ends draw them as circular arcs —
         // see `DockLayout.cornerRadius` for why not a squircle — each
         // starting at the tangent point the path is already on: bottom edge
@@ -886,9 +1041,65 @@ struct DockBerthShape: Shape {
                 to: CGVector(dx: 0, dy: -1)
             )
         }
+    }
 
-        path.closeSubpath()
-        return path
+    /// The rail drawn `pull` off its edge, joined to it by the neck.
+    ///
+    /// Built facing right, like `facingRight`, in a frame `pull` wider: the
+    /// body keeps its place at the left and the edge moves out. Each dock
+    /// then turns it into place, with the body moved `pull` into the panel
+    /// and the edge where the frame's edge always was.
+    private func tethered(in rect: CGRect, pull: CGFloat) -> Path {
+        let vertical = edge.isVertical
+        let w = vertical ? rect.width : rect.height
+        let h = vertical ? rect.height : rect.width
+        let f = min(flareHeight, h / 2)
+        let r = max(min(cornerRadius, min(w, (h - f * 2) / 2)), 0)
+        let fw = max(min(flareWidth, w - r), 0)
+
+        let bridge = DropletTether.bridge(.init(
+            bodyWidth: w,
+            gap: pull,
+            pull: pull,
+            centre: h / 2,
+            contact: (h - f * 2) / 2,
+            flareAlong: f,
+            flareIn: fw,
+            // A broad foot on the edge narrowing to a waist, like the drop
+            // that hangs from the notch.
+            joinHalf: w * 0.45,
+            // Never most of a short rail's length, which read as a slab.
+            footHalf: min(w * 0.9, (h - f * 2) / 2 * 0.4),
+            thinning: thinning,
+            parted: parted
+        ))
+
+        // The corners on the edge side round off only where the neck has
+        // drawn away from them.
+        let rr = max(min(r, (h - f * 2) / 2 - bridge.joinHalf), 0)
+        var body = Path()
+        body.move(to: CGPoint(x: r, y: f))
+        body.addLine(to: CGPoint(x: w - rr, y: f))
+        if rr > 0 {
+            body.addArc(tangent1End: CGPoint(x: w, y: f), tangent2End: CGPoint(x: w, y: h - f), radius: rr)
+        }
+        body.addLine(to: CGPoint(x: w, y: h - f - rr))
+        if rr > 0 {
+            body.addArc(tangent1End: CGPoint(x: w, y: h - f), tangent2End: CGPoint(x: 0, y: h - f), radius: rr)
+        }
+        body.addLine(to: CGPoint(x: r, y: h - f))
+        appendFarEnd(to: &body, width: w, height: h, flare: f, radius: r)
+        body.closeSubpath()
+
+        let canonical = body.union(bridge.path)
+        let reach = w + pull
+        let place: CGAffineTransform = switch edge {
+        case .right: CGAffineTransform(translationX: rect.minX - pull, y: rect.minY)
+        case .left: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: rect.minX + reach, ty: rect.minY)
+        case .top: CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: rect.minX, ty: rect.minY + reach)
+        case .bottom: CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: rect.minX + rect.width, ty: rect.minY - pull)
+        }
+        return canonical.applying(place)
     }
 
     /// Appends a quarter of a superellipse — the continuously curved
@@ -957,4 +1168,16 @@ struct DockBerthShape: Shape {
     .frame(height: DockLayout.maximumHeight + 80)
     .padding()
     .background(.gray)
+}
+
+private extension PanelEdge {
+    /// The side of a docked rail's own frame that lies on the screen's edge.
+    var screenSide: Edge.Set {
+        switch self {
+        case .left: .leading
+        case .right: .trailing
+        case .top: .top
+        case .bottom: .bottom
+        }
+    }
 }

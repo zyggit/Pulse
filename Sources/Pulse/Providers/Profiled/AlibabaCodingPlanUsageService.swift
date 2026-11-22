@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// Alibaba Cloud's Coding Plan (Model Studio / Bailian): a five-hour, a weekly
@@ -24,10 +25,10 @@ extension ProviderProfile {
     static let alibabaCodingPlan = ProviderProfile(
         displayName: "Alibaba Coding Plan",
         iconResource: "alibabacloud",
+        brandColour: 0xFF6A00,
         credential: .apiKey(optional: false),
         accessDescription: { .localized("Uses only the API key you enter in Settings. No Keychain prompt.") },
         keySubtitle: { .localized("From the Coding Plan page in Model Studio. Stored encrypted on this Mac.") },
-        brandColor: 0xFF6A00,
         setupSlug: "alibaba-coding-plan",
         fetch: { await AlibabaCodingPlanUsageService.fetch($0) }
     )

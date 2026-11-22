@@ -1,3 +1,4 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
 import Foundation
 
 /// The Volcengine Coding Plan, sold on Volcengine Ark.
@@ -274,7 +275,7 @@ struct VolcengineUsageService: Sendable {
             request.setValue(value, forHTTPHeaderField: field)
         }
 
-        guard let (data, response) = try? await NetworkSession.shared.data(for: request) else {
+        guard let (data, response) = try? await NetworkSession.shared.recordedData(for: request) else {
             return .failure(Refusal(reason: .unreachable))
         }
 
